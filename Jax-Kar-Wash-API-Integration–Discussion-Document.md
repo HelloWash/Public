@@ -31,7 +31,7 @@ In that **best case**, we would only need to call your API in two steps for most
 1. **Get full customer info** (one POST with phone, email, or plate) → one response with customer + plan + any vehicles.
 2. **Then**, depending on what the customer wants:
    - **Get retention offer** (e.g. `POST /api/retention/get-offer` with `customer_id` or whatever ID you return).
-   - **Apply retention offer** (e.g. `POST /api/retention/apply-offer` with `retention_offer_id` and customer id).
+   - **Apply retention offer** (e.g. `POST /api/retention/apply-offer` with `retention_offer_id` and `customer_id`).
    - **Cancel plan** (e.g. `POST /api/plans/cancel` with `customer_id` and `plan_id` from the first response).
 
 So we would **not** need to fetch the user’s plan, membership, account, or vehicles in separate calls if you can return them in that first payload.
@@ -63,33 +63,33 @@ The voice AI identifies the customer, retrieves plan/membership info (or receive
 
 ```mermaid
 flowchart TD
-    Start[Customer contacts voice AI] --> Try1[Try lookup method 1]
+    Start["Customer contacts<br/>voice AI"] --> Try1["Try lookup by<br/>phone number"]
     Try1 --> Found{Found?}
-    Found -->|No| Try2[Try alternative lookup]
+    Found -->|No| Try2["Try lookup by<br/>email"]
     Try2 --> Found2{Found?}
-    Found2 -->|No| Try3[Try third lookup method]
+    Found2 -->|No| Try3["Try lookup by<br/>license plate"]
     Try3 --> Found3{Found?}
-    Found3 -->|No| End1[Unable to find account]
-    Found -->|Yes| Validate[Validate account info]
+    Found3 -->|No| End1["Unable to find<br/>account"]
+    Found -->|Yes| Validate["Validate<br/>account info"]
     Found2 -->|Yes| Validate
     Found3 -->|Yes| Validate
-    Validate --> GetPlan[POST /api/plans/get-info]
+    Validate --> GetPlan["POST /api/plans<br/>get-info"]
     GetPlan --> HasPlan{Has plan?}
-    HasPlan -->|No| End2[No plan found]
-    HasPlan -->|Yes| Confirm[Confirm plan details with customer]
+    HasPlan -->|No| End2["No plan found"]
+    HasPlan -->|Yes| Confirm["Confirm plan details<br/>with customer"]
     Confirm --> Intent{Customer intent}
-    Intent -->|Cancel| CheckRetention[POST /api/retention/get-offer]
+    Intent -->|Cancel| CheckRetention["POST /api/retention<br/>get-offer"]
     Intent -->|Check offer| CheckRetention
     CheckRetention --> HasOffer{Offer available?}
-    HasOffer -->|Yes| PresentOffer[Present offer to customer]
-    HasOffer -->|No| AskCancel[Ask for cancellation confirmation]
+    HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
+    HasOffer -->|No| AskCancel["Ask for cancellation<br/>confirmation"]
     PresentOffer --> CustomerChoice{Customer choice}
-    CustomerChoice -->|Accept| ApplyOffer[POST /api/retention/apply-offer]
+    CustomerChoice -->|Accept| ApplyOffer["POST /api/retention<br/>apply-offer"]
     CustomerChoice -->|Decline| AskCancel
-    AskCancel --> ConfirmCancel{Customer confirms cancel?}
-    ConfirmCancel -->|Yes| Cancel[POST /api/plans/cancel]
-    ConfirmCancel -->|No| End3[User did not confirm cancellation]
-    ApplyOffer --> SendSMS[Send confirmation SMS]
+    AskCancel --> ConfirmCancel{"Customer confirms<br/>cancel?"}
+    ConfirmCancel -->|Yes| Cancel["POST /api/plans<br/>cancel"]
+    ConfirmCancel -->|No| End3["User did not confirm<br/>cancellation"]
+    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
     Cancel --> SendSMS
     SendSMS --> End4[Complete]
 ```
@@ -98,19 +98,19 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start[Customer provides identifier] --> TryPhone[POST /api/customers/lookup-by-phone]
+    Start["Customer provides<br/>identifier"] --> TryPhone["POST /api/customers<br/>lookup-by-phone"]
     TryPhone --> Result1{Result?}
-    Result1 -->|Found| Success[customer_id obtained]
-    Result1 -->|Not found| TryEmail[Try POST /api/customers/lookup-by-email]
+    Result1 -->|Found| Success["customer_id<br/>obtained"]
+    Result1 -->|Not found| TryEmail["POST /api/customers<br/>lookup-by-email"]
     TryEmail --> Result2{Result?}
     Result2 -->|Found| Success
-    Result2 -->|Not found| TryPlate[Try POST /api/customers/lookup-by-plate]
+    Result2 -->|Not found| TryPlate["POST /api/customers<br/>lookup-by-plate"]
     TryPlate --> Result3{Result?}
     Result3 -->|Found| Success
-    Result3 -->|Not found| AskAlternative[Ask customer for alternative identifier]
-    AskAlternative --> TryPhone
-    Success --> Validate[Validate and confirm account info]
-    Validate --> Next[Proceed to get plan info]
+    Result3 -->|Not found| AskAlt["Ask customer for<br/>alternative identifier"]
+    AskAlt --> TryPhone
+    Success --> Validate["Validate and confirm<br/>account info"]
+    Validate --> Next["Proceed to get<br/>plan info"]
 ```
 
 ---
@@ -576,16 +576,16 @@ sequenceDiagram
                     System->>Customer: "Confirm cancellation of [plan_name]?"
                     Customer->>System: "Yes"
                     System->>API: POST /api/plans/cancel
-                    API-->>System: success
-                    System->>Customer: "Cancelled. Confirmation sent via SMS."
+                    API-->>System: success, effective_date
+                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
                 end
             else No offer
                 API-->>System: retention_offer_id null
                 System->>Customer: "Confirm cancellation of [plan_name]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
-                API-->>System: success
-                System->>Customer: "Cancelled. Confirmation sent via SMS."
+                API-->>System: success, effective_date
+                System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
             end
         else No plan
             API-->>System: plan_id null
@@ -660,19 +660,19 @@ sequenceDiagram
                 System->>Customer: "Offer applied. Confirmation sent via SMS."
             else Customer declines
                 Customer->>System: "No, cancel"
-                System->>Customer: "Confirm cancellation?"
+                System->>Customer: "Confirm cancellation of [plan_name]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
-                API-->>System: success
-                System->>Customer: "Cancelled. Confirmation sent via SMS."
+                API-->>System: success, effective_date
+                System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
             end
         else No offer
             API-->>System: retention_offer_id null
             System->>Customer: "Confirm cancellation of [plan_name]?"
             Customer->>System: "Yes"
             System->>API: POST /api/plans/cancel
-            API-->>System: success
-            System->>Customer: "Cancelled. Confirmation sent via SMS."
+            API-->>System: success, effective_date
+            System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -783,16 +783,16 @@ sequenceDiagram
                     System->>Customer: "Confirm cancellation of [plan_name]?"
                     Customer->>System: "Yes"
                     System->>API: POST /api/plans/cancel
-                    API-->>System: success
-                    System->>Customer: "Cancelled. Confirmation sent via SMS."
+                    API-->>System: success, effective_date
+                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
                 end
             else No offer
                 API-->>System: retention_offer_id null
                 System->>Customer: "Confirm cancellation of [plan_name]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
-                API-->>System: success
-                System->>Customer: "Cancelled. Confirmation sent via SMS."
+                API-->>System: success, effective_date
+                System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
             end
         else No plan
             API-->>System: plan_id null
@@ -843,35 +843,35 @@ Which API endpoints the system calls depends on how the customer is identified a
 
 ```mermaid
 flowchart TD
-    Start[Customer intent detected] --> Try1[Try lookup method 1]
+    Start["Intent detected"] --> Try1["Try lookup by<br/>phone number"]
     Try1 --> Found1{Found?}
-    Found1 -->|No| Try2[Try lookup method 2]
-    Found1 -->|Yes| Validate[Validate account info with customer]
+    Found1 -->|No| Try2["Try lookup by<br/>email"]
+    Found1 -->|Yes| Validate["Validate account info<br/>with customer"]
     Try2 --> Found2{Found?}
-    Found2 -->|No| Try3[Try lookup method 3]
+    Found2 -->|No| Try3["Try lookup by<br/>license plate"]
     Found2 -->|Yes| Validate
     Try3 --> Found3{Found?}
-    Found3 -->|No| AskAlt[Ask for alternative identifier]
+    Found3 -->|No| AskAlt["Ask for alternative<br/>identifier"]
     Found3 -->|Yes| Validate
     AskAlt --> Try1
-    Validate --> GetPlan["POST /api/plans/get-info"]
+    Validate --> GetPlan["POST /api/plans<br/>get-info"]
     GetPlan --> HasPlan{Has plan?}
-    HasPlan -->|No| End1[No plan found]
-    HasPlan -->|Yes| ConfirmPlan[Confirm plan details with customer]
+    HasPlan -->|No| End1["No plan found"]
+    HasPlan -->|Yes| ConfirmPlan["Confirm plan details<br/>with customer"]
     ConfirmPlan --> Intent{Customer intent}
-    Intent -->|Cancel| CheckOffer["POST /api/retention/get-offer"]
+    Intent -->|Cancel| CheckOffer["POST /api/retention<br/>get-offer"]
     Intent -->|Check offer| CheckOffer
     CheckOffer --> HasOffer{Offer available?}
-    HasOffer -->|Yes| PresentOffer[Present offer to customer]
-    HasOffer -->|No| ConfirmCancel[Ask for cancellation confirmation]
+    HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
+    HasOffer -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
     PresentOffer --> CustomerChoice{Customer choice}
-    CustomerChoice -->|Accept| ConfirmApply[Confirm apply offer]
+    CustomerChoice -->|Accept| ConfirmApply["Confirm apply<br/>offer"]
     CustomerChoice -->|Decline| ConfirmCancel
-    ConfirmApply --> ApplyOffer["POST /api/retention/apply-offer"]
-    ConfirmCancel --> CustomerConfirmCancel{Customer confirms cancel?}
-    CustomerConfirmCancel -->|Yes| Cancel["POST /api/plans/cancel"]
-    CustomerConfirmCancel -->|No| End2[User did not confirm cancellation]
-    ApplyOffer --> SendSMS[Send confirmation SMS]
+    ConfirmApply --> ApplyOffer["POST /api/retention<br/>apply-offer"]
+    ConfirmCancel --> CustConfirm{"Customer confirms<br/>cancel?"}
+    CustConfirm -->|Yes| Cancel["POST /api/plans<br/>cancel"]
+    CustConfirm -->|No| End2["User did not confirm<br/>cancellation"]
+    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
     Cancel --> SendSMS
     SendSMS --> End3[Complete]
 ```
@@ -885,7 +885,7 @@ IDs returned from one endpoint are passed into the next. This diagram shows the 
 ```mermaid
 flowchart LR
     subgraph Lookup["Lookup"]
-        A[lookup-by-phone / email / plate]
+        A["lookup-by-phone /<br/>email / plate"]
     end
     subgraph Plan["Plan"]
         B["plans/get-info"]
@@ -934,7 +934,7 @@ Always return JSON. For cancel and apply-offer, include `success: true` or `succ
 | Priority | Lookup by email | `POST /api/customers/lookup-by-email` | `email` | same as phone |
 | Priority | Lookup by plate | `POST /api/customers/lookup-by-plate` | `license_plate`, `state` | `customer_id`, name, vehicle_id |
 | Priority | Get plan info | `POST /api/plans/get-info` | `customer_id` | `plan_id`, status, plan_name |
-| Priority | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message |
+| Priority | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message, effective_date |
 | Priority | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, optionally `plan_id` | `retention_offer_id`, description, expires_at |
 | Priority | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` | `success`, message, retention_offer_id, discount_code |
 | Lower | Get data by identifier | `POST /api/data/get-by-identifier` | Your identifier(s) | Your structure |
