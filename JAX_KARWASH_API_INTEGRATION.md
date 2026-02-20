@@ -185,11 +185,13 @@ X-Tenant-API-Key: <tenant_api_key>
 
 ## Account Management Endpoints
 
-### 3. Get Accounts by User
+### ~~3. Get Accounts by User~~
 
-Retrieve all accounts associated with a user.
+~~Retrieve all accounts associated with a user.~~
 
-**Endpoint**: `GET /api-user/get-accounts-by-user`
+~~**Endpoint**: `GET /api-user/get-accounts-by-user`~~
+
+[02/20/2026 - Marked not supported by Thaneer team]
 
 **Purpose**: Some users may have multiple accounts (e.g., personal and business). This endpoint retrieves all accounts so the user can select which one to manage. We present this as an account selection screen before proceeding with vehicle or subscription operations.
 
