@@ -928,18 +928,35 @@ Always return JSON. For cancel and apply-offer, include `success: true` or `succ
 
 ## Request/Response Summary
 
-| Priority | Operation | Endpoint (example) | Key request fields | Key response fields |
-|----------|-----------|--------------------|--------------------|----------------------|
-| Priority | Lookup by phone | `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, name, email |
-| Priority | Lookup by email | `POST /api/customers/lookup-by-email` | `email` | same as phone |
-| Priority | Lookup by plate | `POST /api/customers/lookup-by-plate` | `license_plate`, `state` | `customer_id`, name, vehicle_id |
-| Priority | Get plan info | `POST /api/plans/get-info` | `customer_id` | `plan_id`, status, plan_name |
-| Priority | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message, effective_date |
-| Priority | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, optionally `plan_id` | `retention_offer_id`, description, expires_at |
-| Priority | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` | `success`, message, retention_offer_id, discount_code |
-| Lower | Get data by identifier | `POST /api/data/get-by-identifier` | Your identifier(s) | Your structure |
-| Lower | Get plan by key | `POST /api/plans/get-info-by-key` | e.g. vehicle_id, account_id | Same as get-info |
-| Lower | Create plan | `POST /api/plans/create` | Per your requirements | Created resource + IDs |
+Two possible integration approaches. We prefer **Best case** (fewest calls); **Multi-call** is the alternative if you keep lookup and plan info separate.
+
+### Best case – single initial payload
+
+One lookup endpoint (by phone, email, or plate) returns **customer + plan + any vehicles** in one response. We use the returned IDs for all follow-on calls; no separate get-plan call.
+
+| Step | Operation | Endpoint (example) | Key request fields | Key response fields |
+|------|-----------|--------------------|--------------------|----------------------|
+| 1 | Get full customer info | e.g. `POST /api/customers/lookup-by-phone` (or lookup-by-email, lookup-by-plate) | `phone` (or `email`, or `license_plate` + `state`) | `customer_id`, `plan_id`, name, email, plan_name, status, next_billing_date, vehicle data (as needed) |
+| 2 | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, `plan_id` (from step 1) | `retention_offer_id`, description, expires_at |
+| 2 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` (from step 1) | `success`, message, retention_offer_id, discount_code |
+| 2 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` (from step 1) | `success`, message, effective_date |
+
+### Multi-call – separate lookup and get plan
+
+Lookup returns customer only; we then call get-info for plan data, then get-offer / apply-offer / cancel as needed.
+
+| Step | Operation | Endpoint (example) | Key request fields | Key response fields |
+|------|-----------|--------------------|--------------------|----------------------|
+| 1 | Lookup by phone | `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, name, email |
+| 1 | Lookup by email | `POST /api/customers/lookup-by-email` | `email` | same as phone |
+| 1 | Lookup by plate | `POST /api/customers/lookup-by-plate` | `license_plate`, `state` | `customer_id`, name, vehicle_id |
+| 2 | Get plan info | `POST /api/plans/get-info` | `customer_id` (from step 1) | `plan_id`, status, plan_name |
+| 3 | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, optionally `plan_id` | `retention_offer_id`, description, expires_at |
+| 3 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` | `success`, message, retention_offer_id, discount_code |
+| 3 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message, effective_date |
+| — | Get data by identifier | `POST /api/data/get-by-identifier` | Your identifier(s) | Your structure |
+| — | Get plan by key | `POST /api/plans/get-info-by-key` | e.g. vehicle_id, account_id | Same as get-info |
+| — | Create plan | `POST /api/plans/create` | Per your requirements | Created resource + IDs |
 
 ---
 
