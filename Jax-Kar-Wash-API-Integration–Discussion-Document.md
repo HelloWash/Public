@@ -142,6 +142,10 @@ Before presenting a **retention offer**, we play back a **value summary** to the
 
 So the order is: **value summary (playback) first** → if still cancelling, **then** present the retention offer (accept/decline) → then apply-offer or confirm cancel.
 
+**Combined endpoint:** It is fine to return **value summary and retention offer in one endpoint** (one response with both). We would use that single response for playback and, if still cancelling, for the offer.
+
+**When to return null:** If the customer has no value gained, or value gained is less than what they paid, you may return **value summary null** and/or **retention offer null**. We will not play value summary or present an offer in that case; we proceed to cancellation confirmation as needed.
+
 ---
 
 ## Endpoint Priority
@@ -316,7 +320,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Purpose:** Return structured data so the voice AI can play back to the customer how much value they get from their plan before we present a retention offer. Plans have tiers and wash allowances (e.g. unlimited, or N washes per day/week/month). Jax knows membership prices, wash history, and single-use wash prices. We need either the raw numbers (plan price, washes used, single-use price per wash) or pre-calculated value saved. The voice AI will phrase the message from this payload; exact wording is not fixed by the API.
 
 **Endpoint:** `POST /api/plans/value-summary`  
-*(Or `/api/membership/value-summary`, `/api/usage/summary`, etc. – path is flexible. This data can also be included in get-info or in the single customer-information payload; if so, a separate call is not needed.)*
+*(Or `/api/membership/value-summary`, `/api/usage/summary`, etc. – path is flexible. This data can also be included in get-info or in the single customer-information payload; if so, a separate call is not needed. You may also combine value summary and retention offer in one endpoint that returns both.)*
 
 **Request Body:**
 ```json
@@ -346,6 +350,8 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 }
 ```
 *Field names can follow your model. We need at least: what the customer pays for the plan, how many washes they used in the period, what a single wash costs without the plan, and either value_saved or the components so we can communicate “you saved $X” or equivalent. If you prefer to return only components (e.g. plan_price, washes_used_in_period, single_use_price_per_wash), we can compute value_saved on our side.*
+
+**Response (200 – no value to show):** If the customer has no value gained or value gained is less than amount paid, you may return value summary null (or an empty/equivalent structure). We will not play value summary and will proceed to get retention offer or confirm cancel.
 
 **Response (404 – e.g. no plan or no usage data):** Standard error body; we will skip value playback and proceed to get retention offer or confirm cancel.
 
@@ -398,7 +404,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 **Priority:** Yes
 
-**Purpose:** Check whether the customer has a retention offer. The response should include a **retention_offer_id** (or equivalent) for use in apply. How you link the offer to your data (plan, account, membership, etc.) is up to your model; we only need a stable offer ID to pass to apply.
+**Purpose:** Check whether the customer has a retention offer. The response should include a **retention_offer_id** (or equivalent) for use in apply. How you link the offer to your data (plan, account, membership, etc.) is up to your model; we only need a stable offer ID to pass to apply. You may combine this with value summary in one endpoint that returns both; if there is no value to show or no offer to give (e.g. no value gained or value gained is less than amount paid), returning retention_offer_id null and/or value summary null is fine—we skip playback and/or offer and proceed to confirm cancel as needed.
 
 **Endpoint:** `POST /api/retention/get-offer`
 
