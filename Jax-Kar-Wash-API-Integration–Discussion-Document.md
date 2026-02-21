@@ -25,6 +25,7 @@ Our preference is the **path of least resistance** (fewest API calls, simplest f
 - Customer/member/account identifiers and profile (name, email, phone)
 - Current plan/membership/subscription info (plan_id, plan_name, status, next_billing_date, etc.)
 - Any vehicle or related data needed for validation or display
+- **Value summary** (wash history / savings) for playback before retention: plan price, washes used in period, single-use price per wash, value saved (or components so we can compute it). If included, we do not need a separate value-summary call.
 
 In that **best case**, we would only need to call your API in two steps for most flows:
 
@@ -53,13 +54,20 @@ Please either:
   - `status: "active"` (or equivalent) on the relevant item, or  
   - A top-level field such as `active_plan_id`, `current_membership_id`, or `primary_account_id` that points to the one we should use for cancel and retention.
 
-We need at least one **stable identifier for the active plan/membership** (whatever you call it) so we can pass it to get retention offer and to cancel. If the customer has multiple and we need to let them choose, we can support that in the voice flow (e.g. “You have Plan A and Plan B; which one do you want to cancel?”), but we need to know how to tell which is which in the payload (e.g. by `plan_id` + `plan_name` or similar).
+We need at least one **stable identifier for the active plan/membership** (whatever you call it) so we can pass it to get retention offer and to cancel. If the customer has multiple and we need to let them choose, we can support that in the voice flow (e.g. “You have Plan A and Plan B; which one do you want to cancel?”), but we need to know how to tell which is which in the payload (e.g. by `plan_id` + `plan_name` or similar). Lookup by phone or email may surface multiple plans or vehicles; lookup by license plate is usually scoped to one vehicle and its active plan, which simplifies cancellation when the customer is cancelling "for this car."
+
+---
+
+**Lookup by phone/email vs. by license plate**
+
+- **Lookup by phone** and **lookup by email** may return **multiple results** (e.g. multiple plans, multiple vehicles, or a combination), because one person can have several accounts, plans, or vehicles. We need to handle that explicitly: either you return a single active/default when you can determine it, or a clear list with stable IDs (and optionally `plan_name` or vehicle info) so we can disambiguate in the voice flow (e.g. "You have Plan A on the Camry and Plan B on the Accord—which do you want to cancel?") and then use only the chosen IDs for get-info, value-summary, cancel, and retention.
+- **Lookup by license plate** (and state) is scoped to **one vehicle**, so the response can naturally be that vehicle and its **active plan** (or the IDs we need for that car). That reduces ambiguity and avoids asking the customer for extra information when they are cancelling for that car. We want to request only what is necessary; when the caller identifies by plate, we can assume the response is for that vehicle's active plan unless you document otherwise.
 
 ---
 
 ## Overview: How the Voice AI Uses Your API
 
-The voice AI identifies the customer, retrieves plan/membership info (or receives it in a single payload—see Design question above), and then either cancels the plan or handles retention offers. The diagrams below assume the **multi-call approach** (lookup, then get plan info, then cancel or retention). If Jax provides a **single customer-information payload** that already includes plan data, the “get plan info” step can be omitted and we would use IDs from that first response for get-offer, apply-offer, and cancel.
+The voice AI identifies the customer, retrieves plan/membership info (or receives it in a single payload—see Design question above), and then either cancels the plan or handles retention offers. The diagrams below assume the **multi-call approach** (lookup, then get plan info, then value summary when cancelling, then get-offer/apply-offer/cancel). For cancellation intent we play back a value summary (wash history/savings) before retention; if that data is in the single payload, no separate value-summary call is needed. If Jax provides a **single customer-information payload** that already includes plan and value-summary data, the separate get plan info and value-summary steps can be omitted and we would use IDs from that first response for get-offer, apply-offer, and cancel.
 
 ```mermaid
 flowchart TD
@@ -78,8 +86,11 @@ flowchart TD
     HasPlan -->|No| End2["No plan found"]
     HasPlan -->|Yes| Confirm["Confirm plan details<br/>with customer"]
     Confirm --> Intent{Customer intent}
-    Intent -->|Cancel| CheckRetention["POST /api/retention<br/>get-offer"]
-    Intent -->|Check offer| CheckRetention
+    Intent -->|Cancel| ValueSummary["Get value summary<br/>play back to customer"]
+    Intent -->|Check offer| CheckRetention["POST /api/retention<br/>get-offer"]
+    ValueSummary --> StillCancel{Still want<br/>to cancel?}
+    StillCancel -->|No| End4
+    StillCancel -->|Yes| CheckRetention
     CheckRetention --> HasOffer{Offer available?}
     HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
     HasOffer -->|No| AskCancel["Ask for cancellation<br/>confirmation"]
@@ -115,11 +126,29 @@ flowchart TD
 
 ---
 
+## Value summary and retention flow
+
+Before presenting a **retention offer**, we play back a **value summary** to the customer so they can see what they’re getting from their plan. This happens only when the customer intent is to cancel.
+
+**Context:** Plans have tiers (e.g. unlimited, N washes per period). Jax knows membership prices, wash history, and single-use wash prices. From that we can communicate: what the customer pays, how often they wash (e.g. X times per month), what each wash would cost without the plan, and the **value saved** (e.g. “You pay $25/month for unlimited; you’ve used 4 washes this month; at $15 each that’s $60 value—you’ve saved $35”). The voice AI will phrase this in natural language from a **structured JSON payload**; exact wording is not fixed in the API.
+
+**Flow:**
+
+1. Customer is identified and plan is confirmed (lookup + get plan info, or single customer payload).
+2. Customer indicates they want to cancel.
+3. **Play back value summary** using data from the value-summary endpoint (or from get-info / single payload if it includes this data). No retention offer yet.
+4. If the customer **still wants to cancel** after hearing the value summary → call **get retention offer**. The retention offer is a concrete incentive (e.g. $Z discount over N months applied to the account) that the customer can accept or decline.
+5. If customer **accepts** the retention offer → apply-offer, then complete. If customer **declines** → ask for cancellation confirmation, then cancel if confirmed.
+
+So the order is: **value summary (playback) first** → if still cancelling, **then** present the retention offer (accept/decline) → then apply-offer or confirm cancel.
+
+---
+
 ## Endpoint Priority
 
 | Priority | Purpose | Endpoints |
 |----------|---------|-----------|
-| **Priority (support first)** | Identify customer, get plan/membership info, trigger cancellation, and retention offer exchange | Look up customers by phone number, email, or license plate; get plan/membership info; cancel plan; get retention offer; apply retention offer |
+| **Priority (support first)** | Identify customer, get plan/membership info, value summary for playback, trigger cancellation, and retention offer exchange | Look up by phone, email, or license plate; get plan info; get value summary (wash history/savings); cancel plan; get retention offer; apply retention offer |
 | **Lower priority (useful later)** | Deeper data and lifecycle operations | Get vehicle/data by identifier, create plan/membership (if needed) |
 
 ---
@@ -138,7 +167,7 @@ flowchart TD
 
 ## Priority Endpoints (Support First)
 
-The endpoints below are what we expect to need for the core voice AI flows: identify the customer, understand their plan/membership, perform cancellation, and handle retention offers. If a single customer-information endpoint returns plan data in one payload, the separate “Get plan info” endpoint (section 4) may not be needed.
+The endpoints below are what we expect to need for the core voice AI flows: identify the customer, understand their plan/membership, play back value summary when cancelling, perform cancellation, and handle retention offers. If a single customer-information endpoint returns plan and value-summary data in one payload, the separate “Get plan info” (section 4) and “Get value summary” (section 5) calls may not be needed.
 
 ---
 
@@ -170,6 +199,8 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 ```
 *Return whatever stable identifier you use for the customer (`customer_id`, `member_id`, `account_id`, etc.). We use it in later calls.*
 
+*Depending on your data, this may return multiple plans or vehicles for one phone number. If so, either return a single active/default or a list with clear identifiers so we can disambiguate with the customer and use only the chosen plan/vehicle for subsequent calls.*
+
 **Response (404 – not found):**
 ```json
 {
@@ -195,7 +226,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 }
 ```
 
-**Response (200 – found):** Same shape as lookup-by-phone (include your customer/member/account identifier and name, email, etc.).
+**Response (200 – found):** Same shape as lookup-by-phone (include your customer/member/account identifier and name, email, etc.). As with phone, the response may include multiple plans or vehicles; we need either a single active/default or a clear list for disambiguation.
 
 **Response (404 – not found):** Same pattern as lookup-by-phone.
 
@@ -228,6 +259,8 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 }
 ```
 *If your hierarchy uses something other than `customer_id` or `vehicle_id`, use your IDs; we will pass them back in subsequent requests.*
+
+*Because the request is keyed by vehicle (plate + state), the response is typically one vehicle and its active plan (or the IDs needed for that vehicle). That scoping lets us proceed without asking for more information when the customer is cancelling for that car.*
 
 **Response (404 – not found):** Same pattern as above.
 
@@ -276,7 +309,49 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 ---
 
-### 5. Cancel Plan / Apply Cancellation
+### 5. Get value summary (wash history / savings)
+
+**Priority:** Yes (for cancellation flow)
+
+**Purpose:** Return structured data so the voice AI can play back to the customer how much value they get from their plan before we present a retention offer. Plans have tiers and wash allowances (e.g. unlimited, or N washes per day/week/month). Jax knows membership prices, wash history, and single-use wash prices. We need either the raw numbers (plan price, washes used, single-use price per wash) or pre-calculated value saved. The voice AI will phrase the message from this payload; exact wording is not fixed by the API.
+
+**Endpoint:** `POST /api/plans/value-summary`  
+*(Or `/api/membership/value-summary`, `/api/usage/summary`, etc. – path is flexible. This data can also be included in get-info or in the single customer-information payload; if so, a separate call is not needed.)*
+
+**Request Body:**
+```json
+{
+  "customer_id": "12345",
+  "plan_id": "sub456"
+}
+```
+*Use the same IDs returned from lookup and get-info.*
+
+**Response (200):**
+```json
+{
+  "customer_id": "12345",
+  "plan_id": "sub456",
+  "plan_name": "Unlimited Monthly",
+  "plan_tier": "unlimited",
+  "plan_price": 25.00,
+  "plan_price_currency": "USD",
+  "period_type": "month",
+  "period_start": "2026-02-01",
+  "period_end": "2026-02-28",
+  "washes_used_in_period": 4,
+  "single_use_price_per_wash": 15.00,
+  "value_of_washes_at_single_use": 60.00,
+  "value_saved_in_period": 35.00
+}
+```
+*Field names can follow your model. We need at least: what the customer pays for the plan, how many washes they used in the period, what a single wash costs without the plan, and either value_saved or the components so we can communicate “you saved $X” or equivalent. If you prefer to return only components (e.g. plan_price, washes_used_in_period, single_use_price_per_wash), we can compute value_saved on our side.*
+
+**Response (404 – e.g. no plan or no usage data):** Standard error body; we will skip value playback and proceed to get retention offer or confirm cancel.
+
+---
+
+### 6. Cancel Plan / Apply Cancellation
 
 **Priority:** Yes
 
@@ -319,7 +394,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 ---
 
-### 6. Get Retention Offer
+### 7. Get Retention Offer
 
 **Priority:** Yes
 
@@ -360,7 +435,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 ---
 
-### 7. Apply Retention Offer
+### 8. Apply Retention Offer
 
 **Priority:** Yes
 
@@ -406,7 +481,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 ---
 
-### 8. Get Vehicle / Related Data by Identifier
+### 9. Get Vehicle / Related Data by Identifier
 
 **Priority:** Lower
 
@@ -450,7 +525,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 ---
 
-### 9. Get Plan / Membership / Subscription (by alternative key)
+### 10. Get Plan / Membership / Subscription (by alternative key)
 
 **Priority:** Lower
 
@@ -471,7 +546,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 ---
 
-### 10. Create Plan / Membership / Subscription
+### 11. Create Plan / Membership / Subscription
 
 **Priority:** Lower
 
@@ -508,6 +583,11 @@ sequenceDiagram
         API-->>System: plan_id, plan_name, status
         System->>Customer: "You have [plan_name]. Is this correct?"
         Customer->>System: "Yes"
+        System->>API: POST /api/plans/value-summary
+        API-->>System: plan_price, washes_used, single_use_price, value_saved
+        System->>Customer: Play back value summary (e.g. savings, usage)
+        Customer->>System: Still want to cancel / Changed mind
+        alt Still want to cancel
         System->>API: POST /api/retention/get-offer
         alt Offer available
             API-->>System: retention_offer_id, description
@@ -532,6 +612,10 @@ sequenceDiagram
             System->>API: POST /api/plans/cancel
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+        end
+        end
+        else Customer changed mind
+            Note over System, Customer: No cancel; complete
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -562,6 +646,11 @@ sequenceDiagram
             API-->>System: plan_id, plan_name, status
             System->>Customer: "You have [plan_name] for this vehicle. Correct?"
             Customer->>System: "Yes"
+            System->>API: POST /api/plans/value-summary
+            API-->>System: plan_price, washes_used, single_use_price, value_saved
+            System->>Customer: Play back value summary (e.g. savings, usage)
+            Customer->>System: Still want to cancel / Changed mind
+            alt Still want to cancel
             System->>API: POST /api/retention/get-offer
             alt Offer available
                 API-->>System: retention_offer_id, description
@@ -586,6 +675,10 @@ sequenceDiagram
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+            end
+            end
+            else Customer changed mind
+                Note over System, Customer: No cancel; complete
             end
         else No plan
             API-->>System: plan_id null
@@ -649,6 +742,11 @@ sequenceDiagram
         API-->>System: plan_id, plan_name
         System->>Customer: "You have [plan_name]. Correct?"
         Customer->>System: "Yes"
+        System->>API: POST /api/plans/value-summary
+        API-->>System: plan_price, washes_used, single_use_price, value_saved
+        System->>Customer: Play back value summary (e.g. savings, usage)
+        Customer->>System: Still want to cancel / Changed mind
+        alt Still want to cancel
         System->>API: POST /api/retention/get-offer
         alt Offer available
             API-->>System: retention_offer_id, description
@@ -673,6 +771,10 @@ sequenceDiagram
             System->>API: POST /api/plans/cancel
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+        end
+        end
+        else Customer changed mind
+            Note over System, Customer: No cancel; complete
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -706,6 +808,11 @@ sequenceDiagram
             API-->>System: plan_id, plan_name, status, next_billing_date
             System->>Customer: "You have [plan_name]. Your next billing is [date]. Is this correct?"
             Customer->>System: "Yes"
+            System->>API: POST /api/plans/value-summary
+            API-->>System: plan_price, washes_used, single_use_price, value_saved
+            System->>Customer: Play back value summary (e.g. savings, usage)
+            Customer->>System: Still want to cancel / Changed mind
+            alt Still want to cancel
             System->>API: POST /api/retention/get-offer
             alt Offer available
                 API-->>System: retention_offer_id, description, discount_percent
@@ -732,6 +839,10 @@ sequenceDiagram
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Your plan has been cancelled. Access until [effective_date]. Confirmation sent to your phone."
+            end
+            end
+            else Customer changed mind
+                Note over System, Customer: No cancel; complete
             end
         else No plan
             API-->>System: plan_id null
@@ -767,6 +878,11 @@ sequenceDiagram
             API-->>System: plan_id, plan_name, status
             System->>Customer: "You have [plan_name] for this vehicle. Is this correct?"
             Customer->>System: "Yes"
+            System->>API: POST /api/plans/value-summary
+            API-->>System: plan_price, washes_used, single_use_price, value_saved
+            System->>Customer: Play back value summary (e.g. savings, usage)
+            Customer->>System: Still want to cancel / Changed mind
+            alt Still want to cancel
             System->>API: POST /api/retention/get-offer
             alt Offer available
                 API-->>System: retention_offer_id, description
@@ -793,6 +909,10 @@ sequenceDiagram
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+            end
+            end
+            else Customer changed mind
+                Note over System, Customer: No cancel; complete
             end
         else No plan
             API-->>System: plan_id null
@@ -859,8 +979,11 @@ flowchart TD
     HasPlan -->|No| End1["No plan found"]
     HasPlan -->|Yes| ConfirmPlan["Confirm plan details<br/>with customer"]
     ConfirmPlan --> Intent{Customer intent}
-    Intent -->|Cancel| CheckOffer["POST /api/retention<br/>get-offer"]
-    Intent -->|Check offer| CheckOffer
+    Intent -->|Cancel| ValueSummary["Get value summary<br/>play back to customer"]
+    Intent -->|Check offer| CheckOffer["POST /api/retention<br/>get-offer"]
+    ValueSummary --> StillCancel{Still want<br/>to cancel?}
+    StillCancel -->|No| End3
+    StillCancel -->|Yes| CheckOffer
     CheckOffer --> HasOffer{Offer available?}
     HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
     HasOffer -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
@@ -880,7 +1003,7 @@ flowchart TD
 
 ### ID Flow Between Endpoints
 
-IDs returned from one endpoint are passed into the next. This diagram shows the minimal set for the **multi-call approach**. If a single customer-information payload is used, `customer_id` and `plan_id` may both come from that first response, and the separate “get plan info” call is skipped.
+IDs returned from one endpoint are passed into the next. This diagram shows the minimal set for the **multi-call approach**. If a single customer-information payload is used, `customer_id` and `plan_id` (and optionally value-summary data) may come from that first response, and the separate get plan info and value-summary calls may be skipped.
 
 ```mermaid
 flowchart LR
@@ -889,6 +1012,7 @@ flowchart LR
     end
     subgraph Plan["Plan"]
         B["plans/get-info"]
+        V["plans/value-summary"]
         C["plans/cancel"]
     end
     subgraph Retention["Retention"]
@@ -897,7 +1021,9 @@ flowchart LR
     end
 
     A -->|customer_id| B
+    B -->|customer_id, plan_id| V
     B -->|plan_id| C
+    V -->|if still cancel| D
     B -->|customer_id, plan_id| D
     D -->|retention_offer_id| E
     A -->|customer_id| E
@@ -919,7 +1045,7 @@ flowchart LR
 - `200` – Success (including “no offer” or “no plan”)
 - `400` – Invalid input or business rule (e.g. already cancelled)
 - `401` – Invalid or missing API key
-- `404` – Resource not found (customer, plan, offer)
+- `404` – Resource not found (customer, plan, offer, or value-summary e.g. no usage data)
 - `500` – Server error
 
 Always return JSON. For cancel and apply-offer, include `success: true` or `success: false` in the body where applicable.
@@ -936,21 +1062,23 @@ One lookup endpoint (by phone, email, or plate) returns **customer + plan + any 
 
 | Step | Operation | Endpoint (example) | Key request fields | Key response fields |
 |------|-----------|--------------------|--------------------|----------------------|
-| 1 | Get full customer info | e.g. `POST /api/customers/lookup-by-phone` (or lookup-by-email, lookup-by-plate) | `phone` (or `email`, or `license_plate` + `state`) | `customer_id`, `plan_id`, name, email, plan_name, status, next_billing_date, vehicle data (as needed) |
-| 2 | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, `plan_id` (from step 1) | `retention_offer_id`, description, expires_at |
-| 2 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` (from step 1) | `success`, message, retention_offer_id, discount_code |
-| 2 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` (from step 1) | `success`, message, effective_date |
+| 1 | Get full customer info | e.g. `POST /api/customers/lookup-by-phone` (or lookup-by-email, lookup-by-plate) | `phone` (or `email`, or `license_plate` + `state`) | `customer_id`, `plan_id`, name, email, plan_name, status, next_billing_date, vehicle data, value summary (or separate call) |
+| 2 | Get value summary (if not in step 1) | `POST /api/plans/value-summary` | `customer_id`, `plan_id` (from step 1) | plan_price, washes_used_in_period, single_use_price_per_wash, value_saved_in_period (or components) |
+| 3 | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, `plan_id` (from step 1) | `retention_offer_id`, description, expires_at |
+| 3 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` (from step 1) | `success`, message, retention_offer_id, discount_code |
+| 3 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` (from step 1) | `success`, message, effective_date |
 
 ### Multi-call – separate lookup and get plan
 
-Lookup returns customer only; we then call get-info for plan data, then get-offer / apply-offer / cancel as needed.
+Lookup returns customer only; we then call get-info for plan data, then (when cancelling) value-summary for playback, then get-offer / apply-offer / cancel as needed.
 
 | Step | Operation | Endpoint (example) | Key request fields | Key response fields |
 |------|-----------|--------------------|--------------------|----------------------|
-| 1 | Lookup by phone | `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, name, email |
-| 1 | Lookup by email | `POST /api/customers/lookup-by-email` | `email` | same as phone |
-| 1 | Lookup by plate | `POST /api/customers/lookup-by-plate` | `license_plate`, `state` | `customer_id`, name, vehicle_id |
+| 1 | Lookup by phone | `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, name, email (may be multiple plans/vehicles) |
+| 1 | Lookup by email | `POST /api/customers/lookup-by-email` | `email` | same as phone (may be multiple plans/vehicles) |
+| 1 | Lookup by plate | `POST /api/customers/lookup-by-plate` | `license_plate`, `state` | `customer_id`, name, vehicle_id (typically one vehicle + active plan) |
 | 2 | Get plan info | `POST /api/plans/get-info` | `customer_id` (from step 1) | `plan_id`, status, plan_name |
+| 2 | Get value summary | `POST /api/plans/value-summary` | `customer_id`, `plan_id` (from step 1–2) | plan_price, washes_used_in_period, single_use_price_per_wash, value_saved_in_period (or components) |
 | 3 | Get retention offer | `POST /api/retention/get-offer` | `customer_id`, optionally `plan_id` | `retention_offer_id`, description, expires_at |
 | 3 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` | `success`, message, retention_offer_id, discount_code |
 | 3 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message, effective_date |
@@ -962,10 +1090,11 @@ Lookup returns customer only; we then call get-info for plan data, then get-offe
 
 ## Testing Recommendations
 
-1. **Priority endpoints first:** Look up customers by phone number, email, or license plate; get plan info; cancel; get retention offer; apply retention offer.
-2. **Error cases:** Not found, invalid IDs, already cancelled, expired offer, invalid phone/email/plate format.
-3. **ID consistency:** Same identifier returned from lookup (and from get-info when used) is used in cancel and retention; retention_offer_id from get-offer is used in apply-offer. If using a single customer payload, customer_id and plan_id from that response are used for subsequent calls.
-4. **Hierarchy:** If you use account/member/vehicle distinctions, test with the IDs and field names that match your model.
+1. **Priority endpoints first:** Look up by phone, email, or license plate; get plan info; get value summary (for cancellation flow); cancel; get retention offer; apply retention offer.
+2. **Multiple results:** Test phone and email lookup when the customer has multiple plans or vehicles (disambiguation or single active); test plate lookup for a single vehicle and its active plan.
+3. **Error cases:** Not found, invalid IDs, already cancelled, expired offer, invalid phone/email/plate format.
+4. **ID consistency:** Same identifier from lookup (and get-info when used) is used for value-summary, cancel, and retention; retention_offer_id from get-offer is used in apply-offer. If using a single customer payload, customer_id and plan_id from that response are used for subsequent calls.
+5. **Hierarchy:** If you use account/member/vehicle distinctions, test with the IDs and field names that match your model.
 
 ---
 
