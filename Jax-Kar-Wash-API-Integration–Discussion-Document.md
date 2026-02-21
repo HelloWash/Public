@@ -128,17 +128,18 @@ flowchart TD
 
 ## Value summary and retention flow
 
-Before presenting a **retention offer**, we play back a **value summary** to the customer so they can see what they’re getting from their plan. This happens only when the customer intent is to cancel.
+Before presenting a **retention offer**, we play back a **value summary** to the customer so they can see what they’re getting from their plan. We only call the value-summary (or combined value-summary + retention-offer) endpoint **after** we have identified the customer, confirmed the plan with them, and **detected that their intent is to cancel** (e.g. after asking “What would you like help with?” and the customer says they want to cancel).
 
 **Context:** Plans have tiers (e.g. unlimited, N washes per period). Jax knows membership prices, wash history, and single-use wash prices. From that we can communicate: what the customer pays, how often they wash (e.g. X times per month), what each wash would cost without the plan, and the **value saved** (e.g. “You pay $25/month for unlimited; you’ve used 4 washes this month; at $15 each that’s $60 value—you’ve saved $35”). The voice AI will phrase this in natural language from a **structured JSON payload**; exact wording is not fixed in the API.
 
 **Flow:**
 
 1. Customer is identified and plan is confirmed (lookup + get plan info, or single customer payload).
-2. Customer indicates they want to cancel.
-3. **Play back value summary** using data from the value-summary endpoint (or from get-info / single payload if it includes this data). No retention offer yet.
-4. If the customer **still wants to cancel** after hearing the value summary → call **get retention offer**. The retention offer is a concrete incentive (e.g. $Z discount over N months applied to the account) that the customer can accept or decline.
-5. If customer **accepts** the retention offer → apply-offer, then complete. If customer **declines** → ask for cancellation confirmation, then cancel if confirmed.
+2. System asks what the customer would like help with; customer indicates they want to cancel (intent = cancel).
+3. **Call value-summary** (or combined endpoint). If the API returns **both value summary and retention offer as null**, we do not play value summary or present an offer; we go straight to cancellation confirmation, then cancel.
+4. **Play back value summary** (only when value summary is not null), using data from the value-summary endpoint (or from get-info / single payload if it includes this data). No retention offer yet.
+5. If the customer **still wants to cancel** after hearing the value summary → call **get retention offer**. The retention offer is a concrete incentive (e.g. $Z discount over N months applied to the account) that the customer can accept or decline.
+6. If customer **accepts** the retention offer → apply-offer, then complete. If customer **declines** → ask for cancellation confirmation, then cancel if confirmed.
 
 So the order is: **value summary (playback) first** → if still cancelling, **then** present the retention offer (accept/decline) → then apply-offer or confirm cancel.
 
@@ -162,6 +163,7 @@ So the order is: **value summary (playback) first** → if still cancelling, **t
 **Base URL:** `https://api.jaxkarwash.example.com` (or your chosen host)
 
 **Authentication:** You can choose your own authentication mechanism (e.g. API key, Bearer token, tenant headers). The following is an example we use for illustration:
+
 - Header: `Api-Key` (required in this example)
 - Header: `X-Tenant-Id` (optional, for multi-tenant in this example)
 
@@ -184,14 +186,17 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Endpoint:** `POST /api/customers/lookup-by-phone`
 
 **Request Body:**
+
 ```json
 {
   "phone": "5551234567"
 }
 ```
+
 *Phone can be normalized (e.g. 10 digits, no +1); document your expected format.*
 
 **Response (200 – found):**
+
 ```json
 {
   "customer_id": "12345",
@@ -201,11 +206,13 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "status": "active"
 }
 ```
+
 *Return whatever stable identifier you use for the customer (`customer_id`, `member_id`, `account_id`, etc.). We use it in later calls.*
 
 *Depending on your data, this may return multiple plans or vehicles for one phone number. If so, either return a single active/default or a list with clear identifiers so we can disambiguate with the customer and use only the chosen plan/vehicle for subsequent calls.*
 
 **Response (404 – not found):**
+
 ```json
 {
   "error": "Customer not found",
@@ -224,6 +231,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Endpoint:** `POST /api/customers/lookup-by-email`
 
 **Request Body:**
+
 ```json
 {
   "email": "john.doe@example.com"
@@ -245,6 +253,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Endpoint:** `POST /api/customers/lookup-by-plate`
 
 **Request Body:**
+
 ```json
 {
   "license_plate": "ABC123",
@@ -253,6 +262,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 ```
 
 **Response (200 – found):**
+
 ```json
 {
   "customer_id": "12345",
@@ -262,6 +272,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "state": "CA"
 }
 ```
+
 *If your hierarchy uses something other than `customer_id` or `vehicle_id`, use your IDs; we will pass them back in subsequent requests.*
 
 *Because the request is keyed by vehicle (plate + state), the response is typically one vehicle and its active plan (or the IDs needed for that vehicle). That scoping lets us proceed without asking for more information when the customer is cancelling for that car.*
@@ -280,14 +291,17 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 *(Or `/api/membership/get-info`, `/api/subscription/get-info`, etc. – path is flexible.)*
 
 **Request Body:**
+
 ```json
 {
   "customer_id": "12345"
 }
 ```
+
 *If you key by something else (e.g. `member_id`, `account_id`), use that field name; we will send back the identifier you returned from lookup.*
 
 **Response (200 – has active plan):**
+
 ```json
 {
   "plan_id": "sub456",
@@ -299,9 +313,11 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "auto_renew": true
 }
 ```
+
 *Use your real field names. We need at least one stable ID for the plan/membership/subscription (e.g. `plan_id`, `subscription_id`, `membership_id`) to use in cancel and optionally in retention.*
 
 **Response (200 – no active plan):**
+
 ```json
 {
   "plan_id": null,
@@ -323,15 +339,18 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 *(Or `/api/membership/value-summary`, `/api/usage/summary`, etc. – path is flexible. This data can also be included in get-info or in the single customer-information payload; if so, a separate call is not needed. You may also combine value summary and retention offer in one endpoint that returns both.)*
 
 **Request Body:**
+
 ```json
 {
   "customer_id": "12345",
   "plan_id": "sub456"
 }
 ```
+
 *Use the same IDs returned from lookup and get-info.*
 
 **Response (200):**
+
 ```json
 {
   "customer_id": "12345",
@@ -349,6 +368,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "value_saved_in_period": 35.00
 }
 ```
+
 *Field names can follow your model. We need at least: what the customer pays for the plan, how many washes they used in the period, what a single wash costs without the plan, and either value_saved or the components so we can communicate “you saved $X” or equivalent. If you prefer to return only components (e.g. plan_price, washes_used_in_period, single_use_price_per_wash), we can compute value_saved on our side.*
 
 **Response (200 – no value to show):** If the customer has no value gained or value gained is less than amount paid, you may return value summary null (or an empty/equivalent structure). We will not play value summary and will proceed to get retention offer or confirm cancel.
@@ -367,6 +387,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 *(Or `/api/subscription/cancel`, `/api/cancellation/apply`, etc.)*
 
 **Request Body:**
+
 ```json
 {
   "customer_id": "12345",
@@ -375,9 +396,11 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "cancellation_reason": "Customer requested"
 }
 ```
+
 *`plan_id` is the ID you returned from “get plan/membership info”. If you use `subscription_id` or `membership_id`, use that name.*
 
 **Response (200 – success):**
+
 ```json
 {
   "success": true,
@@ -390,6 +413,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 ```
 
 **Response (400 – e.g. already cancelled):**
+
 ```json
 {
   "success": false,
@@ -409,15 +433,18 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Endpoint:** `POST /api/retention/get-offer`
 
 **Request Body:**
+
 ```json
 {
   "customer_id": "12345",
   "plan_id": "sub456"
 }
 ```
+
 *Include whatever IDs you need to look up the offer (e.g. customer + plan, or account + membership).*
 
 **Response (200 – offer available):**
+
 ```json
 {
   "retention_offer_id": "offer789",
@@ -428,9 +455,11 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
   "terms": "Valid for one-time use"
 }
 ```
+
 *`retention_offer_id` must be unique and usable in the apply endpoint. You can also include IDs that tie to your hierarchy (e.g. plan_id, account_id) if needed.*
 
 **Response (200 – no offer):**
+
 ```json
 {
   "retention_offer_id": null,
@@ -450,15 +479,18 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 **Endpoint:** `POST /api/retention/apply-offer`
 
 **Request Body:**
+
 ```json
 {
   "retention_offer_id": "offer789",
   "customer_id": "12345"
 }
 ```
+
 *If you need additional IDs (e.g. plan_id, account_id, membership_id) to apply the offer, add those fields; we can pass back any IDs you returned in get-offer or get-info.*
 
 **Response (200 – success):**
+
 ```json
 {
   "success": true,
@@ -471,6 +503,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 ```
 
 **Response (400/404 – e.g. expired or invalid):**
+
 ```json
 {
   "success": false,
@@ -497,14 +530,17 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 *(Or `/api/vehicles/get-by-account`, `/api/members/get-vehicles`, etc. – name and path to match your model.)*
 
 **Request Body (example – by account/customer):**
+
 ```json
 {
   "customer_id": "12345"
 }
 ```
+
 *Alternatively you might use `account_id`, `member_id`, `vehicle_id`, or a combination; document what you need.*
 
 **Response (200):**
+
 ```json
 {
   "data": [
@@ -520,9 +556,11 @@ These support richer flows and lifecycle operations. We do not assume your hiera
   ]
 }
 ```
+
 *Structure can follow your hierarchy (e.g. vehicles with nested or linked plan/membership). We need enough to support cancellation or retention if this path is used in those flows.*
 
 **Response (200 – empty):**
+
 ```json
 {
   "data": []
@@ -541,11 +579,13 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 *(Path and name can vary.)*
 
 **Request Body (example):**
+
 ```json
 {
   "vehicle_id": "v789"
 }
 ```
+
 *Or `account_id`, `membership_id`, etc., depending on your hierarchy.*
 
 **Response:** Same idea as Priority endpoint 4: return plan/membership/subscription info and the ID(s) needed for cancel and retention.
@@ -579,7 +619,7 @@ sequenceDiagram
     participant System as Voice AI System
     participant API as Jax Kar Wash API
 
-    Customer->>System: "I want to cancel"
+    Customer->>System: Provides phone number (or "I want to cancel")
     System->>API: POST /api/customers/lookup-by-phone
     alt Customer found
         API-->>System: customer_id, name, email
@@ -589,38 +629,48 @@ sequenceDiagram
         API-->>System: plan_id, plan_name, status
         System->>Customer: "You have [plan_name]. Is this correct?"
         Customer->>System: "Yes"
+        System->>Customer: "What would you like help with?"
+        Customer->>System: "I want to cancel"
         System->>API: POST /api/plans/value-summary
-        API-->>System: plan_price, washes_used, single_use_price, value_saved
-        System->>Customer: Play back value summary (e.g. savings, usage)
-        Customer->>System: Still want to cancel / Changed mind
-        alt Still want to cancel
-        System->>API: POST /api/retention/get-offer
-        alt Offer available
-            API-->>System: retention_offer_id, description
-            System->>Customer: "We have an offer: [description]. Would you like to keep your plan?"
-            alt Customer accepts offer
-                Customer->>System: "Yes, I'll keep it"
-                System->>API: POST /api/retention/apply-offer
-                API-->>System: success
-                System->>Customer: "Offer applied. Confirmation sent via SMS."
-            else Customer declines
-                Customer->>System: "No, cancel it"
-                System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
-                Customer->>System: "Yes"
-                System->>API: POST /api/plans/cancel
-                API-->>System: success, effective_date
-                System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-            end
-        else No offer
-            API-->>System: retention_offer_id null
+        API-->>System: value_summary, retention_offer (or separate get-offer)
+        alt Both value summary and offer null
             System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
             Customer->>System: "Yes"
             System->>API: POST /api/plans/cancel
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-        end
-        else Customer changed mind
-            Customer->>System: Changed mind, no cancel
+        else Value summary and/or offer present
+            System->>Customer: Play back value summary (e.g. savings, usage)
+            Customer->>System: Still want to cancel / Changed mind
+            alt Customer changed mind
+                Customer->>System: Changed mind, no cancel
+            else Still want to cancel
+                System->>API: POST /api/retention/get-offer
+                alt Offer available
+                    API-->>System: retention_offer_id, description
+                    System->>Customer: "We have an offer: [description]. Would you like to keep your plan?"
+                    alt Customer accepts offer
+                        Customer->>System: "Yes, I'll keep it"
+                        System->>API: POST /api/retention/apply-offer
+                        API-->>System: success
+                        System->>Customer: "Offer applied. Confirmation sent via SMS."
+                    else Customer declines
+                        Customer->>System: "No, cancel it"
+                        System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/plans/cancel
+                        API-->>System: success, effective_date
+                        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                    end
+                else No offer
+                    API-->>System: retention_offer_id null
+                    System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
+                    Customer->>System: "Yes"
+                    System->>API: POST /api/plans/cancel
+                    API-->>System: success, effective_date
+                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                end
+            end
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -649,40 +699,50 @@ sequenceDiagram
         System->>API: POST /api/plans/get-info
         alt Plan found
             API-->>System: plan_id, plan_name, status
-                System->>Customer: "You have [plan_name] for this vehicle. Correct?"
-                Customer->>System: "Yes"
-                System->>API: POST /api/plans/value-summary
-                API-->>System: plan_price, washes_used, single_use_price, value_saved
-                System->>Customer: Play back value summary (e.g. savings, usage)
-                Customer->>System: Still want to cancel / Changed mind
-                alt Still want to cancel
-                System->>API: POST /api/retention/get-offer
-                alt Offer available
-                API-->>System: retention_offer_id, description
-                System->>Customer: "We have an offer: [description]. Keep your plan?"
-                alt Customer accepts
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/retention/apply-offer
-                    API-->>System: success
-                    System->>Customer: "Offer applied. Confirmation sent via SMS."
-                else Customer declines
-                    Customer->>System: "No, cancel"
-                    System->>Customer: "Confirm cancellation of [plan_name]?"
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/plans/cancel
-                    API-->>System: success, effective_date
-                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-                end
-            else No offer
-                API-->>System: retention_offer_id null
-                System->>Customer: "Confirm cancellation of [plan_name]?"
+            System->>Customer: "You have [plan_name] for this vehicle. Correct?"
+            Customer->>System: "Yes"
+            System->>Customer: "What would you like help with?"
+            Customer->>System: "I want to cancel"
+            System->>API: POST /api/plans/value-summary
+            API-->>System: value_summary, retention_offer (or separate get-offer)
+            alt Both value summary and offer null
+                System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-            end
-            else Customer changed mind
-                Customer->>System: Changed mind, no cancel
+            else Value summary and/or offer present
+                System->>Customer: Play back value summary (e.g. savings, usage)
+                Customer->>System: Still want to cancel / Changed mind
+                alt Customer changed mind
+                    Customer->>System: Changed mind, no cancel
+                else Still want to cancel
+                    System->>API: POST /api/retention/get-offer
+                    alt Offer available
+                        API-->>System: retention_offer_id, description
+                        System->>Customer: "We have an offer: [description]. Keep your plan?"
+                        alt Customer accepts
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/retention/apply-offer
+                            API-->>System: success
+                            System->>Customer: "Offer applied. Confirmation sent via SMS."
+                        else Customer declines
+                            Customer->>System: "No, cancel"
+                            System->>Customer: "Confirm cancellation of [plan_name]?"
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/plans/cancel
+                            API-->>System: success, effective_date
+                            System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                        end
+                    else No offer
+                        API-->>System: retention_offer_id null
+                        System->>Customer: "Confirm cancellation of [plan_name]?"
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/plans/cancel
+                        API-->>System: success, effective_date
+                        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                    end
+                end
             end
         else No plan
             API-->>System: plan_id null
@@ -746,38 +806,48 @@ sequenceDiagram
         API-->>System: plan_id, plan_name
         System->>Customer: "You have [plan_name]. Correct?"
         Customer->>System: "Yes"
+        System->>Customer: "What would you like help with?"
+        Customer->>System: "I want to cancel"
         System->>API: POST /api/plans/value-summary
-        API-->>System: plan_price, washes_used, single_use_price, value_saved
-        System->>Customer: Play back value summary (e.g. savings, usage)
-        Customer->>System: Still want to cancel / Changed mind
-        alt Still want to cancel
-        System->>API: POST /api/retention/get-offer
-        alt Offer available
-            API-->>System: retention_offer_id, description
-            System->>Customer: "We have an offer: [description]. Keep your plan?"
-            alt Customer accepts
-                Customer->>System: "Yes"
-                System->>API: POST /api/retention/apply-offer
-                API-->>System: success
-                System->>Customer: "Offer applied. Confirmation sent via SMS."
-            else Customer declines
-                Customer->>System: "No, cancel"
-                System->>Customer: "Confirm cancellation of [plan_name]?"
-                Customer->>System: "Yes"
-                System->>API: POST /api/plans/cancel
-                API-->>System: success, effective_date
-                System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-            end
-        else No offer
-            API-->>System: retention_offer_id null
-            System->>Customer: "Confirm cancellation of [plan_name]?"
+        API-->>System: value_summary, retention_offer (or separate get-offer)
+        alt Both value summary and offer null
+            System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
             Customer->>System: "Yes"
             System->>API: POST /api/plans/cancel
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-        end
-        else Customer changed mind
-            Customer->>System: Changed mind, no cancel
+        else Value summary and/or offer present
+            System->>Customer: Play back value summary (e.g. savings, usage)
+            Customer->>System: Still want to cancel / Changed mind
+            alt Customer changed mind
+                Customer->>System: Changed mind, no cancel
+            else Still want to cancel
+                System->>API: POST /api/retention/get-offer
+                alt Offer available
+                    API-->>System: retention_offer_id, description
+                    System->>Customer: "We have an offer: [description]. Keep your plan?"
+                    alt Customer accepts
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/retention/apply-offer
+                        API-->>System: success
+                        System->>Customer: "Offer applied. Confirmation sent via SMS."
+                    else Customer declines
+                        Customer->>System: "No, cancel"
+                        System->>Customer: "Confirm cancellation of [plan_name]?"
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/plans/cancel
+                        API-->>System: success, effective_date
+                        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                    end
+                else No offer
+                    API-->>System: retention_offer_id null
+                    System->>Customer: "Confirm cancellation of [plan_name]?"
+                    Customer->>System: "Yes"
+                    System->>API: POST /api/plans/cancel
+                    API-->>System: success, effective_date
+                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                end
+            end
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -811,40 +881,50 @@ sequenceDiagram
             API-->>System: plan_id, plan_name, status, next_billing_date
             System->>Customer: "You have [plan_name]. Your next billing is [date]. Is this correct?"
             Customer->>System: "Yes"
+            System->>Customer: "What would you like help with?"
+            Customer->>System: "I want to cancel"
             System->>API: POST /api/plans/value-summary
-            API-->>System: plan_price, washes_used, single_use_price, value_saved
-            System->>Customer: Play back value summary (e.g. savings, usage)
-            Customer->>System: Still want to cancel / Changed mind
-            alt Still want to cancel
-            System->>API: POST /api/retention/get-offer
-            alt Offer available
-                API-->>System: retention_offer_id, description, discount_percent
-                System->>Customer: "Before we cancel, we have an offer: [description]. Would you like to keep your plan with this offer?"
-                alt Customer accepts
-                    Customer->>System: "Yes, I'll keep it"
-                    System->>Customer: "Just to confirm, apply [description]?"
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/retention/apply-offer
-                    API-->>System: success, discount_code
-                    System->>Customer: "Great! Your offer has been applied. Your discount code is [discount_code]. A confirmation has been sent to your phone."
-                else Customer declines
-                    Customer->>System: "No, I still want to cancel"
-                    System->>Customer: "I understand. Just to confirm, you want to cancel [plan_name] effective [date]?"
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/plans/cancel
-                    API-->>System: success, effective_date
-                    System->>Customer: "Your plan has been cancelled. You'll have access until [effective_date]. A confirmation has been sent to your phone."
-                end
-            else No offer
-                API-->>System: retention_offer_id null
+            API-->>System: value_summary, retention_offer (or separate get-offer)
+            alt Both value summary and offer null
                 System->>Customer: "I understand you want to cancel [plan_name]. Just to confirm, cancel effective [next_billing_date]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Your plan has been cancelled. Access until [effective_date]. Confirmation sent to your phone."
-            end
-            else Customer changed mind
-                Customer->>System: Changed mind, no cancel
+            else Value summary and/or offer present
+                System->>Customer: Play back value summary (e.g. savings, usage)
+                Customer->>System: Still want to cancel / Changed mind
+                alt Customer changed mind
+                    Customer->>System: Changed mind, no cancel
+                else Still want to cancel
+                    System->>API: POST /api/retention/get-offer
+                    alt Offer available
+                        API-->>System: retention_offer_id, description, discount_percent
+                        System->>Customer: "Before we cancel, we have an offer: [description]. Would you like to keep your plan with this offer?"
+                        alt Customer accepts
+                            Customer->>System: "Yes, I'll keep it"
+                            System->>Customer: "Just to confirm, apply [description]?"
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/retention/apply-offer
+                            API-->>System: success, discount_code
+                            System->>Customer: "Great! Your offer has been applied. Your discount code is [discount_code]. A confirmation has been sent to your phone."
+                        else Customer declines
+                            Customer->>System: "No, I still want to cancel"
+                            System->>Customer: "I understand. Just to confirm, you want to cancel [plan_name] effective [date]?"
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/plans/cancel
+                            API-->>System: success, effective_date
+                            System->>Customer: "Your plan has been cancelled. You'll have access until [effective_date]. A confirmation has been sent to your phone."
+                        end
+                    else No offer
+                        API-->>System: retention_offer_id null
+                        System->>Customer: "I understand you want to cancel [plan_name]. Just to confirm, cancel effective [next_billing_date]?"
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/plans/cancel
+                        API-->>System: success, effective_date
+                        System->>Customer: "Your plan has been cancelled. Access until [effective_date]. Confirmation sent to your phone."
+                    end
+                end
             end
         else No plan
             API-->>System: plan_id null
@@ -880,40 +960,50 @@ sequenceDiagram
             API-->>System: plan_id, plan_name, status
             System->>Customer: "You have [plan_name] for this vehicle. Is this correct?"
             Customer->>System: "Yes"
+            System->>Customer: "What would you like help with?"
+            Customer->>System: "I want to cancel"
             System->>API: POST /api/plans/value-summary
-            API-->>System: plan_price, washes_used, single_use_price, value_saved
-            System->>Customer: Play back value summary (e.g. savings, usage)
-            Customer->>System: Still want to cancel / Changed mind
-            alt Still want to cancel
-            System->>API: POST /api/retention/get-offer
-            alt Offer available
-                API-->>System: retention_offer_id, description
-                System->>Customer: "We have an offer: [description]. Would you like to keep your plan?"
-                alt Customer accepts
-                    Customer->>System: "Yes"
-                    System->>Customer: "Confirm applying [description]?"
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/retention/apply-offer
-                    API-->>System: success
-                    System->>Customer: "Offer applied. Confirmation sent via SMS."
-                else Customer declines
-                    Customer->>System: "No, cancel it"
-                    System->>Customer: "Confirm cancellation of [plan_name]?"
-                    Customer->>System: "Yes"
-                    System->>API: POST /api/plans/cancel
-                    API-->>System: success, effective_date
-                    System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-                end
-            else No offer
-                API-->>System: retention_offer_id null
-                System->>Customer: "Confirm cancellation of [plan_name]?"
+            API-->>System: value_summary, retention_offer (or separate get-offer)
+            alt Both value summary and offer null
+                System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
                 Customer->>System: "Yes"
                 System->>API: POST /api/plans/cancel
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-            end
-            else Customer changed mind
-                Customer->>System: Changed mind, no cancel
+            else Value summary and/or offer present
+                System->>Customer: Play back value summary (e.g. savings, usage)
+                Customer->>System: Still want to cancel / Changed mind
+                alt Customer changed mind
+                    Customer->>System: Changed mind, no cancel
+                else Still want to cancel
+                    System->>API: POST /api/retention/get-offer
+                    alt Offer available
+                        API-->>System: retention_offer_id, description
+                        System->>Customer: "We have an offer: [description]. Would you like to keep your plan?"
+                        alt Customer accepts
+                            Customer->>System: "Yes"
+                            System->>Customer: "Confirm applying [description]?"
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/retention/apply-offer
+                            API-->>System: success
+                            System->>Customer: "Offer applied. Confirmation sent via SMS."
+                        else Customer declines
+                            Customer->>System: "No, cancel it"
+                            System->>Customer: "Confirm cancellation of [plan_name]?"
+                            Customer->>System: "Yes"
+                            System->>API: POST /api/plans/cancel
+                            API-->>System: success, effective_date
+                            System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                        end
+                    else No offer
+                        API-->>System: retention_offer_id null
+                        System->>Customer: "Confirm cancellation of [plan_name]?"
+                        Customer->>System: "Yes"
+                        System->>API: POST /api/plans/cancel
+                        API-->>System: success, effective_date
+                        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+                    end
+                end
             end
         else No plan
             API-->>System: plan_id null
@@ -1035,6 +1125,7 @@ flowchart LR
 ## Error Handling
 
 **Standard error body:**
+
 ```json
 {
   "error": "Error type",
@@ -1043,6 +1134,7 @@ flowchart LR
 ```
 
 **HTTP status codes:**
+
 - `200` – Success (including “no offer” or “no plan”)
 - `400` – Invalid input or business rule (e.g. already cancelled)
 - `401` – Invalid or missing API key
