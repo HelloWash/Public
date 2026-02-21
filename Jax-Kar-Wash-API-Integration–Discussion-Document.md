@@ -87,10 +87,9 @@ flowchart TD
     HasPlan -->|Yes| Confirm["Confirm plan details<br/>with customer"]
     Confirm --> Intent{Customer intent}
     Intent -->|Cancel| ValueSummary["Get value summary<br/>play back to customer"]
-    Intent -->|Check offer| CheckRetention["POST /api/retention<br/>get-offer"]
     ValueSummary --> StillCancel{Still want<br/>to cancel?}
     StillCancel -->|No| End4
-    StillCancel -->|Yes| CheckRetention
+    StillCancel -->|Yes| CheckRetention["POST /api/retention<br/>get-offer"]
     CheckRetention --> HasOffer{Offer available?}
     HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
     HasOffer -->|No| AskCancel["Ask for cancellation<br/>confirmation"]
@@ -1071,10 +1070,9 @@ flowchart TD
     HasPlan -->|Yes| ConfirmPlan["Confirm plan details<br/>with customer"]
     ConfirmPlan --> Intent{Customer intent}
     Intent -->|Cancel| ValueSummary["Get value summary<br/>play back to customer"]
-    Intent -->|Check offer| CheckOffer["POST /api/retention<br/>get-offer"]
     ValueSummary --> StillCancel{Still want<br/>to cancel?}
     StillCancel -->|No| End3
-    StillCancel -->|Yes| CheckOffer
+    StillCancel -->|Yes| CheckOffer["POST /api/retention<br/>get-offer"]
     CheckOffer --> HasOffer{Offer available?}
     HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
     HasOffer -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
