@@ -613,9 +613,8 @@ sequenceDiagram
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
         end
-        end
         else Customer changed mind
-            Note over System, Customer: No cancel; complete
+            Customer->>System: Changed mind, no cancel
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -644,15 +643,15 @@ sequenceDiagram
         System->>API: POST /api/plans/get-info
         alt Plan found
             API-->>System: plan_id, plan_name, status
-            System->>Customer: "You have [plan_name] for this vehicle. Correct?"
-            Customer->>System: "Yes"
-            System->>API: POST /api/plans/value-summary
-            API-->>System: plan_price, washes_used, single_use_price, value_saved
-            System->>Customer: Play back value summary (e.g. savings, usage)
-            Customer->>System: Still want to cancel / Changed mind
-            alt Still want to cancel
-            System->>API: POST /api/retention/get-offer
-            alt Offer available
+                System->>Customer: "You have [plan_name] for this vehicle. Correct?"
+                Customer->>System: "Yes"
+                System->>API: POST /api/plans/value-summary
+                API-->>System: plan_price, washes_used, single_use_price, value_saved
+                System->>Customer: Play back value summary (e.g. savings, usage)
+                Customer->>System: Still want to cancel / Changed mind
+                alt Still want to cancel
+                System->>API: POST /api/retention/get-offer
+                alt Offer available
                 API-->>System: retention_offer_id, description
                 System->>Customer: "We have an offer: [description]. Keep your plan?"
                 alt Customer accepts
@@ -676,9 +675,8 @@ sequenceDiagram
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
             end
-            end
             else Customer changed mind
-                Note over System, Customer: No cancel; complete
+                Customer->>System: Changed mind, no cancel
             end
         else No plan
             API-->>System: plan_id null
@@ -772,9 +770,8 @@ sequenceDiagram
             API-->>System: success, effective_date
             System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
         end
-        end
         else Customer changed mind
-            Note over System, Customer: No cancel; complete
+            Customer->>System: Changed mind, no cancel
         end
     else Customer not found
         API-->>System: error: Customer not found
@@ -840,9 +837,8 @@ sequenceDiagram
                 API-->>System: success, effective_date
                 System->>Customer: "Your plan has been cancelled. Access until [effective_date]. Confirmation sent to your phone."
             end
-            end
             else Customer changed mind
-                Note over System, Customer: No cancel; complete
+                Customer->>System: Changed mind, no cancel
             end
         else No plan
             API-->>System: plan_id null
@@ -910,9 +906,8 @@ sequenceDiagram
                 API-->>System: success, effective_date
                 System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
             end
-            end
             else Customer changed mind
-                Note over System, Customer: No cancel; complete
+                Customer->>System: Changed mind, no cancel
             end
         else No plan
             API-->>System: plan_id null
