@@ -155,9 +155,8 @@ flowchart TD
     ConfirmCancel --> CustConfirm{"Customer confirms<br/>cancel?"}
     CustConfirm -->|Yes| Cancel["POST /api/plans<br/>cancel"]
     CustConfirm -->|No| NoConfirm["User did not confirm<br/>cancellation"]
-    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
-    Cancel --> SendSMS
-    SendSMS --> Done[Complete]
+    ApplyOffer --> Done[Complete]
+    Cancel --> Done
 ```
 
 **Lookup failure and fallback**
@@ -704,7 +703,7 @@ sequenceDiagram
         Customer->>System: "Yes"
         System->>API: POST /api/plans/cancel
         API-->>System: success, effective_date
-        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+        System->>Customer: "Your plan is cancelled. Access continues until [date]. You're all set."
     else Value summary and/or offer present
         System->>Customer: Play back value summary
         Customer->>System: Still want to cancel or changed mind
@@ -731,13 +730,13 @@ sequenceDiagram
         Customer->>System: "Yes, I'll keep it"
         System->>API: POST /api/retention/apply-offer
         API-->>System: success
-        System->>Customer: "Offer applied. Confirmation sent via SMS."
+        System->>Customer: "Offer applied. You're all set."
     else Customer declines or no offer
         System->>Customer: "Just to confirm, you want to cancel [plan_name]?"
         Customer->>System: "Yes"
         System->>API: POST /api/plans/cancel
         API-->>System: success, effective_date
-        System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
+        System->>Customer: "Your plan is cancelled. Access continues until [date]. You're all set."
     end
 ```
 
@@ -791,7 +790,7 @@ sequenceDiagram
         Customer->>System: "Yes"
         System->>API: POST /api/retention/apply-offer
         API-->>System: success, discount_code
-        System->>Customer: "Offer applied successfully. Your discount code is [discount_code]. Confirmation sent via SMS."
+        System->>Customer: "Offer applied successfully. Your discount code is [discount_code]."
     else No offer
         API-->>System: retention_offer_id null
         System->>Customer: "No retention offers available at this time."
@@ -871,12 +870,11 @@ flowchart TD
     PresentOffer --> TakeOffer{"Do they want to take it?"}
     TakeOffer -->|Yes| ApplyOffer["POST /api/retention<br/>apply-offer"]
     TakeOffer -->|No| ConfirmCancel
-    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
+    ApplyOffer --> End3[Complete]
     ConfirmCancel --> CustConfirm{"Customer confirms<br/>cancel?"}
     CustConfirm -->|Yes| Cancel["POST /api/plans<br/>cancel"]
     CustConfirm -->|No| End2["User did not confirm<br/>cancellation"]
-    Cancel --> SendSMS
-    SendSMS --> End3[Complete]
+    Cancel --> End3
 ```
 
 ---
