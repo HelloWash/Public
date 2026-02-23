@@ -1,10 +1,51 @@
 # Jax Kar Wash API Integration – Discussion Document
 
-This document outlines proposed API endpoints, request/response formats, and flows for voice AI integration and is intended for discussion. Paths use `/api/` and can be adjusted to match your conventions. **All operations are POST** for consistency.
+This document outlines proposed API endpoints, request/response formats, and flows for voice AI integration and is intended for discussion. Paths use `/api/` and can be adjusted to match your conventions.
 
 **Data hierarchy note:** We do not assume how Jax models accounts, members, plans, memberships, or vehicles. Terminology (e.g. "subscription", "plan", "membership") is used generically. Map our terms to your entities and IDs as appropriate. Where an endpoint could be "by account", "by member", or "by vehicle", we describe it generically so you can align with your structure.
 
 **Workflow note:** The workflows and diagrams in this document represent our general plan for how the voice AI will interact with your API. More discussion with the tech teams and Meddy is expected to iron out specific workflow details, confirmation prompts, error handling, and edge cases. This document serves as a starting point for those discussions.
+
+**API flexibility:** Endpoint names, paths, and response shapes in this document are illustrative. We will align to Jax's grouping (e.g. one combined value-summary + retention-offer endpoint). **Key terms** used throughout: *value summary* = wash history/savings for playback before retention; *retention offer* = the offer we present and may apply.
+
+---
+
+## Table of contents
+
+- [Business context](#business-context)
+- [Integration approach](#integration-approach)
+- [Endpoint grouping options](#endpoint-grouping-options)
+- [Overview: How the Voice AI Uses Your API](#overview-how-the-voice-ai-uses-your-api)
+- [Value summary and retention flow](#value-summary-and-retention-flow)
+- [Endpoint Priority](#endpoint-priority)
+- [Base Configuration](#base-configuration)
+- [Priority Endpoints (Support First)](#priority-endpoints-support-first)
+  - [1. Lookup Customer by Phone](#1-lookup-customer-by-phone)
+  - [2. Lookup Customer by Email](#2-lookup-customer-by-email)
+  - [3. Lookup Customer by License Plate](#3-lookup-customer-by-license-plate)
+  - [4. Get Plan / Membership / Subscription Info](#4-get-plan--membership--subscription-info)
+  - [5. Get value summary (wash history / savings)](#5-get-value-summary-wash-history--savings)
+  - [6. Cancel Plan / Apply Cancellation](#6-cancel-plan--apply-cancellation)
+  - [7. Get Retention Offer](#7-get-retention-offer)
+  - [8. Apply Retention Offer](#8-apply-retention-offer)
+- [Lower Priority Endpoints (Useful Later)](#lower-priority-endpoints-useful-later)
+  - [9. Get Vehicle / Related Data by Identifier](#9-get-vehicle--related-data-by-identifier)
+  - [10. Get Plan / Membership / Subscription (by alternative key)](#10-get-plan--membership--subscription-by-alternative-key)
+  - [11. Create Plan / Membership / Subscription](#11-create-plan--membership--subscription)
+- [Operational Flows (Priority)](#operational-flows-priority)
+  - [Flow 1: Cancel by Phone](#flow-1-cancel-by-phone)
+  - [Flow 2: Cancel by License Plate](#flow-2-cancel-by-license-plate)
+  - [Flow 3: Retention Offer – Get and Apply](#flow-3-retention-offer--get-and-apply)
+  - [Flow 4: When Lookup by Phone Fails – Identify by Email](#flow-4-when-lookup-by-phone-fails--identify-by-email)
+  - [Flow 5 and 6: Full Cancellation (Detailed)](#flow-5-and-6-full-cancellation-detailed)
+  - [API Call Decision Tree](#api-call-decision-tree)
+  - [ID Flow Between Endpoints](#id-flow-between-endpoints)
+- [Error Handling](#error-handling)
+- [Request/Response Summary](#requestresponse-summary)
+  - [Request/Response flow](#requestresponse-flow)
+- [Testing Recommendations](#testing-recommendations)
+- [Next Steps](#next-steps)
+- [Future discussion: all-in-one option](#future-discussion-all-in-one-option)
 
 ---
 
@@ -16,30 +57,36 @@ To do that, we need an API integration so that HelloWash systems can take action
 
 ---
 
-## Design question: Single customer payload vs. multiple endpoints
+## Integration approach
 
-**Can you provide a single “customer information” endpoint that returns one payload with all the data we need?**
+This document assumes the following flow. **Lookup by phone** returns **customer + plan + vehicle**; we disambiguate if needed (email, license plate, or clarifying questions). Once the plan is isolated, we fetch **value summary** and **retention offer** (one combined endpoint or separate endpoints). **If value summary or offer are missing**, we do not present the retention path to the customer. **If both exist**, we play the value summary and ask the customer to stay on the plan; **if they still reject**, we present the retention offer; **if they still refuse and want to cancel**, we cancel. The sections below describe this flow in more detail.
 
-Our preference is the **path of least resistance** (fewest API calls, simplest flow). Ideally we would call **one** endpoint (e.g. lookup by phone, email, or license plate) and receive a **single response** that already includes:
+**Endpoint names, paths, and response shapes** in this document are illustrative and can be customized to match Jax's grouping (e.g. value summary and retention offer as one combined endpoint, or value summary nested inside the retention-offer response). The logical grouping gives clear separation of concerns, smaller responses per call, and flexibility in when to fetch value/offer after the plan is known.
 
-- Customer/member/account identifiers and profile (name, email, phone)
-- Current plan/membership/subscription info (plan_id, plan_name, status, next_billing_date, etc.)
-- Any vehicle or related data needed for validation or display
-- **Value summary** (wash history / savings) for playback before retention: plan price, washes used in period, single-use price per wash, value saved (or components so we can compute it). If included, we do not need a separate value-summary call.
+## Endpoint grouping options
 
-In that **best case**, we would only need to call your API in two steps for most flows:
+This section describes that same flow in terms of how data can be grouped.
 
-1. **Get full customer info** (one POST with phone, email, or plate) → one response with customer + plan + any vehicles.
-2. **Then**, depending on what the customer wants:
-   - **Get retention offer** (e.g. `POST /api/retention/get-offer` with `customer_id` or whatever ID you return).
-   - **Apply retention offer** (e.g. `POST /api/retention/apply-offer` with `retention_offer_id` and `customer_id`).
-   - **Cancel plan** (e.g. `POST /api/plans/cancel` with `customer_id` and `plan_id` from the first response).
+**Value summary** means wash history/savings we play back before presenting an offer; **retention offer** means the offer we present and may apply. These can be one combined endpoint or value summary nested inside the retention-offer response—endpoint names and shapes are flexible.
 
-So we would **not** need to fetch the user’s plan, membership, account, or vehicles in separate calls if you can return them in that first payload.
+**Default first lookup:** The **first lookup is always by phone** (caller’s number is available from our infrastructure). Email and license plate are used when phone lookup fails or when we need to **disambiguate** (e.g. multiple plans or vehicles).
 
-**If you can support a single customer-information payload:** please confirm and share the response shape (or an example). We will align our flows and docs to use that as the primary path.
+**When there are multiple results:** We use alternative lookups (email, license plate) or voice disambiguation until we **isolate the single plan** to cancel. Only then do we fetch value summary and retention offer.
 
-**If you need to keep separate endpoints** (lookup customer, then get plan info, then get vehicles, etc.): that is fine. The rest of this document describes that multi-call approach so we can implement either way. We just want to set the expectation and assumption up front: the path of least resistance is preferred, and a single customer data payload is the best-case scenario.
+**How data is grouped in this flow:**
+
+- **First lookup – Customer + plan + vehicle:** One lookup (e.g. by phone) returns **customer and their plan(s) and vehicle(s)**. Value and offer are not in this response; we fetch them after the plan is isolated.
+- **Value summary + retention offer (combined):** One endpoint returns both **wash history/savings and retention offer**. We call it **once we know which plan** we are cancelling (after the first lookup and any disambiguation).
+
+**Flow:** Lookup by phone (customer + plan + vehicle). If multiple results, disambiguate (email, plate, or clarifying questions). Once the plan is isolated, **one combined call** for value summary + retention offer. Then playback, present offer, apply-offer or cancel.
+
+```mermaid
+flowchart LR
+    Step1["Lookup by phone"]
+    Step2["Disambiguate if multiple"]
+    Step3["Value summary and retention offer combined"]
+    Step1 --> Step2 --> Step3
+```
 
 ---
 
@@ -47,7 +94,7 @@ So we would **not** need to fetch the user’s plan, membership, account, or veh
 
 If a customer can have more than one plan, account, or membership, we need a clear way to **isolate the current active one** so we know which ID to use for cancellation and retention offers.
 
-Please either:
+We have 2 options:
 
 - **Option A:** Return a single **active** plan/membership in the payload (e.g. the one that is current for this customer or this vehicle), and/or  
 - **Option B:** If you return a list (e.g. `plans: [...]` or `memberships: [...]`), include a field we can use to identify the active one, for example:
@@ -65,47 +112,13 @@ We need at least one **stable identifier for the active plan/membership** (whate
 
 ---
 
-## Endpoint grouping options
-
-We can support different ways Jax groups data. Two integration approaches are documented below; diagrams and flows in this document show both.
-
-**Default first lookup:** The **first lookup is always by phone** (caller’s number is available from our infrastructure). Email and license plate are used when phone lookup fails or when we need to **disambiguate** (e.g. multiple plans or vehicles).
-
-**When there are multiple results:** We use alternative lookups (email, license plate) or voice disambiguation until we **isolate the single plan** to cancel. Only then do we fetch value summary and retention offer (or use them from the first response if all-in-one).
-
-**Logical groupings:**
-
-- **Grouping A – All-in-one:** One lookup (e.g. by phone) returns customer + plan(s) + vehicle(s) + **value summary + retention offer** in a single response. No further "get plan" or "get value/offer" calls for the cancel flow.
-- **Grouping B – Customer + plan + vehicle:** One lookup returns customer and their plan(s) and vehicle(s). Used when Jax does not return value/offer in the same call.
-- **Grouping C – Value summary + retention offer (combined):** One endpoint returns both wash history/savings and retention offer. We call this **once we know which plan** we are cancelling (after B and any disambiguation).
-
-**Two integration approaches:**
-
-- **Approach 1 – All-in-one:** Lookup by phone (Grouping A). One response has everything. Greet, then if cancel: playback and present offer from that response; only apply-offer or cancel as follow-on API calls.
-- **Approach 2 – Logical (B then C):** Lookup by phone (Grouping B). If multiple results, disambiguate (email/plate or voice). Once the plan is isolated, **one combined call** (Grouping C) for value summary + retention offer. Then playback, present offer, apply-offer or cancel.
-
-```mermaid
-flowchart LR
-    subgraph Approach1 [Approach 1 All-in-one]
-        A1["Lookup by phone<br/>Grouping A"]
-    end
-    subgraph Approach2 [Approach 2 Logical]
-        B1["Lookup by phone<br/>Grouping B"]
-        B2["Disambiguate if multiple"]
-        B3["Value summary plus<br/>retention offer combined<br/>Grouping C"]
-        B1 --> B2 --> B3
-    end
-```
-
----
-
 ## Overview: How the Voice AI Uses Your API
 
-This document describes **two integration approaches**. (1) **All-in-one** – one lookup by phone returns customer, plan, vehicle, value summary, and retention offer; we greet, then if cancel we play back and present the offer from that response; only apply-offer or cancel are follow-on API calls. (2) **Logical (B then C)** – lookup by phone returns customer + plan + vehicle; we disambiguate if needed (email/plate or voice), then make **one combined** value-summary + retention-offer call; after that we play back, present offer, and apply-offer or cancel. The default first lookup is always by phone (incoming call’s ANI).
+The integration flow is: lookup by phone returns customer + plan + vehicle; we disambiguate if needed (email, license plate, or clarifying questions, e.g. "Which plan do you want to cancel?"), then make **one combined** value-summary + retention-offer call; after that we play back, present offer, and apply-offer or cancel. The default first lookup is always by phone (incoming call’s ANI).
 
 **Call start and greeting (high level):**
 
-For Approach 1, "Get plan or single payload" is the all-in-one response (includes value summary + offer). For Approach 2, it is customer + plan + vehicle only; value+offer come later in one combined call.
+"Get customer + plan + vehicle" is the first lookup response; value and offer come in a later combined call.
 
 ```mermaid
 flowchart TD
@@ -113,7 +126,7 @@ flowchart TD
     LookupPhone --> Found{Found?}
     Found -->|No| LookupFail["Lookup failure"]
     LookupFail --> Fallback["See Lookup failure<br/>and fallback"]
-    Found -->|Yes| GetPlan["Get plan or<br/>single payload"]
+    Found -->|Yes| GetPlan["Get customer + plan<br/>+ vehicle"]
     GetPlan --> Greet["AI greets with context"]
     Greet --> ConfirmIfNeeded["Validate or confirm<br/>plan if needed"]
     ConfirmIfNeeded --> Intent["Customer intent"]
@@ -126,21 +139,22 @@ When the customer’s intent is cancel, the flow continues as below. See the Ope
 
 ```mermaid
 flowchart TD
-    IntentCancel["Customer intent = cancel"] --> GetValueOffer["Get value summary and retention offer<br/>from first response or one combined call"]
-    GetValueOffer --> StillCancel{Still want<br/>to cancel?}
+    IntentCancel["Customer intent = cancel"] --> GetValueOffer["Get value summary and retention offer<br/>one combined call"]
+    GetValueOffer --> HaveBundle{"Value summary and retention offer<br/>present?"}
+    HaveBundle -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
+    HaveBundle -->|Yes| PresentValue["Present value summary<br/>to customer"]
+    PresentValue --> StillCancel{"Still want to cancel?"}
     StillCancel -->|No| ChangedMind["Customer changed mind<br/>end no cancel"]
-    StillCancel -->|Yes| HasOffer{Offer available?}
-    HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
-    HasOffer -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
-    PresentOffer --> CustomerChoice{Customer choice}
-    CustomerChoice -->|Accept| ApplyOffer["POST /api/retention<br/>apply-offer"]
-    CustomerChoice -->|Decline| ConfirmCancel
+    StillCancel -->|Yes| PresentOffer["Present retention offer<br/>to customer"]
+    PresentOffer --> TakeOffer{"Do they want to take it?"}
+    TakeOffer -->|Yes| ApplyOffer["POST /api/retention<br/>apply-offer"]
+    TakeOffer -->|No| ConfirmCancel
     ConfirmCancel --> CustConfirm{"Customer confirms<br/>cancel?"}
     CustConfirm -->|Yes| Cancel["POST /api/plans<br/>cancel"]
     CustConfirm -->|No| NoConfirm["User did not confirm<br/>cancellation"]
     ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
     Cancel --> SendSMS
-    SendSMS --> Complete[Complete]
+    SendSMS --> Done[Complete]
 ```
 
 **Lookup failure and fallback**
@@ -166,16 +180,15 @@ flowchart TD
 
 Before presenting a **retention offer**, we play back a **value summary** to the customer so they can see what they’re getting from their plan. We only use value summary and retention offer data **after** the customer has been identified (at call start via lookup) and has stated cancel intent (after the AI has asked "How can I help?" and the customer says they want to cancel). If we already greeted by name from lookup, we may still confirm account or plan when needed (e.g. multiple plans).
 
-**Value summary and retention offer as one combined endpoint:** When they are not already in the first lookup response, **value summary and retention offer are a single combined endpoint**. We call it once we have isolated the plan to cancel; the response is used for playback and for presenting the offer (no separate get-offer call).
+**How value summary and retention offer can be provided:** **(a)** Separate: value-summary API and retention-offer API (single responsibility). **(b)** Combined: one endpoint (e.g. get_value_summary_and_retention_offer or retention offer that includes value summary). Flow: present value summary first → ask if still want to cancel → if yes, present retention offer → accept (apply-offer) or no (confirm cancel). When both are null, go straight to cancellation confirmation. See Overview flowchart (After greeting: cancel intent and outcomes).
 
 **Context:** Plans have tiers (e.g. unlimited, N washes per period). Jax knows membership prices, wash history, and single-use wash prices. From that we can communicate: what the customer pays, how often they wash (e.g. X times per month), what each wash would cost without the plan, and the **value saved** (e.g. “You pay $25/month for unlimited; you’ve used 4 washes this month; at $15 each that’s $60 value—you’ve saved $35”). The voice AI will phrase this in natural language from a **structured JSON payload**; exact wording is not fixed in the API.
 
 **Flow:**
 
-- **Approach 1 (all-in-one):** Value summary and offer are in the first lookup response; no extra call. We play back and present the offer from that response. Then apply-offer or confirm cancel as needed.
-- **Approach 2 (logical):** After the plan is isolated, we call the **combined** value-summary + retention-offer endpoint once. We play back value summary and present the offer from that single response. Then apply-offer or confirm cancel as needed.
+- After the plan is isolated, we call the **combined** value-summary + retention-offer endpoint once. We play back value summary and present the offer from that single response. Then apply-offer or confirm cancel as needed.
 
-Common sequence (both approaches): (1) Customer identified and plan confirmed (lookup + get plan info, or single payload). (2) Customer states cancel intent. (3) We have value summary and retention offer data (from first response or one combined call). If both are null, we go straight to cancellation confirmation, then cancel. (4) Play back value summary when not null. (5) If customer still wants to cancel, present the retention offer from the same data. (6) If customer accepts then apply-offer; if declines then confirm cancel, then cancel. It is fine for Jax to return **value summary and retention offer in one endpoint** (one response with both); we use that single response for playback and for the offer.
+**Common sequence:** (1) Customer identified and plan confirmed. (2) Customer states cancel intent. (3) We have value summary and retention offer data (from one combined call or separate calls). If both are null → cancellation confirmation, then cancel. (4) Present value summary when not null. (5) If customer still wants to cancel, present retention offer. (6) Accept → apply-offer; decline → confirm cancel, then cancel. See Overview flowchart (After greeting: cancel intent and outcomes).
 
 **When to return null:** If the customer has no value gained, or value gained is less than what they paid, you may return **value summary null** and/or **retention offer null**. We will not play value summary or present an offer in that case; we proceed to cancellation confirmation as needed.
 
@@ -188,24 +201,26 @@ Common sequence (both approaches): (1) Customer identified and plan confirmed (l
 | **Priority (support first)** | Identify customer, get plan/membership info, value summary for playback, trigger cancellation, and retention offer exchange | Look up by phone, email, or license plate; get plan info; get value summary (wash history/savings); cancel plan; get retention offer; apply retention offer |
 | **Lower priority (useful later)** | Deeper data and lifecycle operations | Get vehicle/data by identifier, create plan/membership (if needed) |
 
+*Value summary and retention offer may be: separate endpoints (single responsibility) or one combined endpoint.*
+
 ---
 
 ## Base Configuration
 
 **Base URL:** `https://api.jaxkarwash.example.com` (or your chosen host)
 
-**Authentication:** You can choose your own authentication mechanism (e.g. API key, Bearer token, tenant headers). The following is an example we use for illustration:
+**Authentication:** You can choose your own authentication mechanism (e.g. API key, Bearer token, or OAuth2). The following is for illustration only; use whatever fits your setup.
 
-- Header: `Api-Key` (required in this example)
-- Header: `X-Tenant-Id` (optional, for multi-tenant in this example)
+- **Header:** `Api-Key` (or `Authorization: Bearer <token>` for Bearer, or OAuth2 access token in `Authorization` if you use OAuth2).
+- **Content-Type:** `application/json` for all POST requests.
 
-**Content-Type:** `application/json` for all POST requests
+*This integration is single-tenant; tenant-scoping headers (e.g. `X-Tenant-Id`) are not required.*
 
 ---
 
 ## Priority Endpoints (Support First)
 
-The endpoints below are what we expect to need for the core voice AI flows: identify the customer, understand their plan/membership, play back value summary when cancelling, perform cancellation, and handle retention offers. If a single customer-information endpoint returns plan and value-summary data in one payload, the separate “Get plan info” (section 4) and “Get value summary” (section 5) calls may not be needed.
+The endpoints below are what we expect to need for the core voice AI flows: identify the customer, understand their plan/membership, play back value summary when cancelling, perform cancellation, and handle retention offers. The endpoint paths and names below (e.g. `POST /api/retention/get-offer`, `POST /api/plans/value-summary`) are **examples** and can be combined or renamed to match how you group data (e.g. value summary + retention combined) as described in the Integration approach and Endpoint grouping options above.
 
 ---
 
@@ -315,7 +330,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 ### 4. Get Plan / Membership / Subscription Info
 
-**Priority:** Yes (unless a single customer-information payload already includes this data—see Design question at the top.)
+**Priority:** Yes
 
 **Purpose:** Retrieve the customer’s current plan, membership, or subscription so we can confirm what they have and obtain any ID needed for cancellation or retention. We use “plan/membership/subscription” generically; map to your entity (e.g. subscription, membership, plan).
 
@@ -365,7 +380,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 **Priority:** Yes (for cancellation flow)
 
-**Purpose:** Return structured data so the voice AI can play back to the customer how much value they get from their plan before we present a retention offer. Plans have tiers and wash allowances (e.g. unlimited, or N washes per day/week/month). Jax knows membership prices, wash history, and single-use wash prices. We need either the raw numbers (plan price, washes used, single-use price per wash) or pre-calculated value saved. The voice AI will phrase the message from this payload; exact wording is not fixed by the API. This endpoint can be **combined with retention offer** in one call; when combined, we make one request and use the response for both playback and for presenting the offer (no separate get-offer call).
+**Purpose:** Return structured data so the voice AI can play back to the customer how much value they get from their plan before we present a retention offer. Plans have tiers and wash allowances (e.g. unlimited, or N washes per day/week/month). Jax knows membership prices, wash history, and single-use wash prices. We need either the raw numbers (plan price, washes used, single-use price per wash) or pre-calculated value saved. The voice AI will phrase the message from this payload; exact wording is not fixed by the API. This may be a separate endpoint or combined with retention offer in one call; when combined, one response is used for playback and for the offer.
 
 **Endpoint:** `POST /api/plans/value-summary`  
 *(Or `/api/membership/value-summary`, `/api/usage/summary`, etc. – path is flexible. This data can also be included in get-info or in the single customer-information payload; if so, a separate call is not needed. You may also combine value summary and retention offer in one endpoint that returns both.)*
@@ -403,9 +418,9 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 *Field names can follow your model. We need at least: what the customer pays for the plan, how many washes they used in the period, what a single wash costs without the plan, and either value_saved or the components so we can communicate “you saved $X” or equivalent. If you prefer to return only components (e.g. plan_price, washes_used_in_period, single_use_price_per_wash), we can compute value_saved on our side.*
 
-**Response (200 – no value to show):** If the customer has no value gained or value gained is less than amount paid, you may return value summary null (or an empty/equivalent structure). We will not play value summary and will proceed to get retention offer or confirm cancel.
+**Response (200 – no value to show):** If the customer has no value gained or value gained is less than amount paid, you may return value summary null (or an empty/equivalent structure). We will not play value summary and will proceed to cancellation confirmation or to presenting the retention offer (if returned in the same response).
 
-**Response (404 – e.g. no plan or no usage data):** Standard error body; we will skip value playback and proceed to get retention offer or confirm cancel.
+**Response (404 – e.g. no plan or no usage data):** Standard error body; we will skip value playback and proceed to cancellation confirmation or to presenting the retention offer (if returned in the same response).
 
 ---
 
@@ -460,7 +475,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 **Priority:** Yes
 
-**Purpose:** Check whether the customer has a retention offer. The response should include a **retention_offer_id** (or equivalent) for use in apply. How you link the offer to your data (plan, account, membership, etc.) is up to your model; we only need a stable offer ID to pass to apply. This endpoint **may be combined with value summary** in one response; when combined, we use that single response for both playback and for presenting the offer. If there is no value to show or no offer to give (e.g. no value gained or value gained is less than amount paid), returning retention_offer_id null and/or value summary null is fine—we skip playback and/or offer and proceed to confirm cancel as needed.
+**Purpose:** Check whether the customer has a retention offer. The response should include a **retention_offer_id** (or equivalent) for use in apply. How you link the offer to your data (plan, account, membership, etc.) is up to your model; we only need a stable offer ID to pass to apply. This may be a separate endpoint or combined with value summary in one call. This endpoint **may be combined with value summary** in one response; when combined, we use that single response for both playback and for presenting the offer. If there is no value to show or no offer to give (e.g. no value gained or value gained is less than amount paid), returning retention_offer_id null and/or value summary null is fine—we skip playback and/or offer and proceed to confirm cancel as needed.
 
 **Endpoint:** `POST /api/retention/get-offer`
 
@@ -506,7 +521,7 @@ The endpoints below are what we expect to need for the core voice AI flows: iden
 
 **Priority:** Yes
 
-**Purpose:** Apply or redeem a retention offer. Uses the **retention_offer_id** from get-offer and a customer/member/account identifier so the offer is applied in line with your data model.
+**Purpose:** Apply or redeem a retention offer. Uses the **retention_offer_id** from get-offer or from the combined value-summary+retention-offer response, and a customer/member/account identifier so the offer is applied in line with your data model.
 
 **Endpoint:** `POST /api/retention/apply-offer`
 
@@ -645,7 +660,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 ### Flow 1: Cancel by Phone
 
-**Diagram 1a – Call start (phone):** Incoming call; system looks up by known phone, then greets with context. If not found, see Lookup failure and fallback (Overview section). For Approach 1 the lookup response includes value summary and retention offer; for Approach 2 it is customer + plan + vehicle only.
+**Diagram 1a – Call start (phone):** Incoming call; system looks up by known phone, then greets with context. If not found, see Lookup failure and fallback (Overview section). Lookup returns customer + plan + vehicle; value summary and retention offer are fetched later (combined or separate).
 
 ```mermaid
 sequenceDiagram
@@ -667,7 +682,7 @@ sequenceDiagram
     end
 ```
 
-**Diagram 1b – Cancel by phone (after greeting):** Customer said they want to cancel; confirm plan if needed, then get value summary and retention offer (one combined call or from first response). Outcomes are in Diagram 1c.
+**Diagram 1b – Cancel by phone (after greeting):** Customer said they want to cancel; confirm plan if needed, then get value summary and retention offer (one combined call or separate value-summary and get-offer calls). Outcomes are in Diagram 1c.
 
 ```mermaid
 sequenceDiagram
@@ -698,7 +713,7 @@ sequenceDiagram
     end
 ```
 
-Approach 1: value summary and offer already in first lookup response; no extra call. Approach 2: one combined value-summary+retention-offer call after plan is isolated.
+After plan is isolated, we call the combined value-summary+retention-offer endpoint (or separate endpoints) once.
 
 **Diagram 1c – Cancel outcomes:** After we have value summary and offer data (or when no value/offer), one of three outcomes.
 
@@ -721,27 +736,6 @@ sequenceDiagram
         System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
     end
 ```
-
-**Flow 1 – Approach 1 (all-in-one):** One lookup by phone returns customer, plan, vehicle, value summary, and retention offer. No extra API call for value/offer.
-
-```mermaid
-sequenceDiagram
-    participant Customer
-    participant System as Voice AI System
-    participant API as Jax Kar Wash API
-
-    System->>API: POST /api/customers/lookup-by-phone
-    API-->>System: customer, plan, vehicle, value_summary, retention_offer
-    System->>Customer: "Hi [name], how can I help you today?"
-    Customer->>System: "I want to cancel"
-    System->>Customer: Play back value summary from response
-    Customer->>System: Still want to cancel
-    System->>Customer: Present offer from response
-    Customer->>System: Accept or decline
-    Note over System: Then apply-offer or cancel per Diagram 1c
-```
-
----
 
 ### Flow 2: Cancel by License Plate
 
@@ -841,7 +835,7 @@ For a detailed step-by-step sequence of cancellation by phone, see **Flow 1** (D
 
 ### API Call Decision Tree
 
-Which API endpoints the system calls depends on call start (lookup by known phone first), then customer intent. All calls are POST. This diagram shows the decision points including lookup failure fallback, validation, confirmation, and error handling. For Approach 1, value+offer come from the first lookup response. For Approach 2, one combined call after plan is isolated.
+Which API endpoints the system calls depends on call start (lookup by known phone first), then customer intent. All calls are POST. This diagram shows the decision points including lookup failure fallback, validation, confirmation, and error handling. Value summary and retention offer come from one combined call (or separate calls) after plan is isolated.
 
 ```mermaid
 flowchart TD
@@ -862,20 +856,20 @@ flowchart TD
     HasPlan -->|No| End1["No plan found"]
     HasPlan -->|Yes| ConfirmPlan["Confirm plan details<br/>with customer if needed"]
     ConfirmPlan --> Intent{Customer intent}
-    Intent -->|Cancel| GetValueOffer["Get value summary and retention offer<br/>from first response or one combined call"]
-    GetValueOffer --> StillCancel{Still want<br/>to cancel?}
-    StillCancel -->|No| End3
-    StillCancel -->|Yes| HasOffer{Offer available?}
-    HasOffer -->|Yes| PresentOffer["Present offer<br/>to customer"]
-    HasOffer -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
-    PresentOffer --> CustomerChoice{Customer choice}
-    CustomerChoice -->|Accept| ConfirmApply["Confirm apply<br/>offer"]
-    CustomerChoice -->|Decline| ConfirmCancel
-    ConfirmApply --> ApplyOffer["POST /api/retention<br/>apply-offer"]
+    Intent -->|Cancel| GetValueOffer["Get value summary and retention offer<br/>one combined call"]
+    GetValueOffer --> HaveBundle{"Value summary and retention offer<br/>present?"}
+    HaveBundle -->|No| ConfirmCancel["Ask for cancellation<br/>confirmation"]
+    HaveBundle -->|Yes| PresentValue["Present value summary<br/>to customer"]
+    PresentValue --> StillCancel{"Still want<br/>to cancel?"}
+    StillCancel -->|No| End4["Changed mind, no cancel"]
+    StillCancel -->|Yes| PresentOffer["Present retention offer<br/>to customer"]
+    PresentOffer --> TakeOffer{"Do they want to take it?"}
+    TakeOffer -->|Yes| ApplyOffer["POST /api/retention<br/>apply-offer"]
+    TakeOffer -->|No| ConfirmCancel
+    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
     ConfirmCancel --> CustConfirm{"Customer confirms<br/>cancel?"}
     CustConfirm -->|Yes| Cancel["POST /api/plans<br/>cancel"]
     CustConfirm -->|No| End2["User did not confirm<br/>cancellation"]
-    ApplyOffer --> SendSMS["Send confirmation<br/>SMS"]
     Cancel --> SendSMS
     SendSMS --> End3[Complete]
 ```
@@ -884,7 +878,7 @@ flowchart TD
 
 ### ID Flow Between Endpoints
 
-IDs returned from one endpoint are passed into the next. This diagram shows the minimal set for the **multi-call approach**. For Approach 2, value summary and retention offer are one combined endpoint; for Approach 1, they are included in the first lookup response. If a single customer-information payload is used, `customer_id` and `plan_id` (and optionally value-summary data) may come from that first response, and the separate get plan info and value-summary calls may be skipped.
+IDs returned from one endpoint are passed into the next. This diagram shows the minimal set for the **multi-call approach**. Value summary and retention offer are one combined endpoint (or separate value-summary and get-offer); we call after plan is isolated.
 
 ```mermaid
 flowchart LR
@@ -910,7 +904,7 @@ flowchart LR
     A -->|customer_id| E
 ```
 
-Jax may return value summary and retention offer in one combined response; then a single call replaces the value-summary and get-offer steps.
+If value summary and retention offer are combined, one call replaces the separate value-summary and get-offer steps.
 
 ---
 
@@ -939,33 +933,23 @@ Always return JSON. For cancel and apply-offer, include `success: true` or `succ
 
 ## Request/Response Summary
 
-Approach 1 uses one lookup returning everything. Approach 2 uses lookup by phone (default), disambiguation if needed, then one combined value-summary+retention-offer call.
+Lookup by phone (default) returns customer + plan + vehicle; disambiguation if needed; then one combined value-summary+retention-offer call (or separate calls). Then apply-offer or cancel.
 
-### Approach 1 – All-in-one
+### Request/Response flow
 
-One lookup (e.g. by phone) returns **customer + plan + vehicles + value summary + retention offer** in a single response. No separate get-plan, value-summary, or get-offer calls. For cancel flow we only call apply-offer or cancel.
+Lookup by phone (default) returns customer + plan + vehicle. If multiple results, disambiguate (email, license plate, or clarifying questions). Then one **combined** value-summary + retention-offer call (or use separate value-summary and get-retention-offer endpoints if preferred). Then apply-offer or cancel.
 
-| Step | Operation | Endpoint (example) | Key request fields | Key response fields |
-|------|-----------|--------------------|--------------------|----------------------|
-| 1 | Get full customer info including value summary and retention offer | e.g. `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, `plan_id`, name, email, plan_name, status, next_billing_date, vehicle data, value_summary, retention_offer |
-| 2 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` (from step 1) | `success`, message, retention_offer_id, discount_code |
-| 2 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` (from step 1) | `success`, message, effective_date |
-
-### Approach 2 – Logical (B then C)
-
-Lookup by phone (default) returns customer + plan + vehicle. If multiple results, disambiguate (email/plate or voice). Then one **combined** value-summary + retention-offer call. Then apply-offer or cancel.
-
-| Step | Operation | Endpoint (example) | Key request fields | Key response fields |
-|------|-----------|--------------------|--------------------|----------------------|
-| 1 | Lookup by phone | `POST /api/customers/lookup-by-phone` | `phone` | `customer_id`, name, email, plan_id, plan_name, vehicle data (may be multiple plans/vehicles) |
-| 1 | Lookup by email or plate (if needed for disambiguation) | `POST /api/customers/lookup-by-email` or `lookup-by-plate` | `email` or `license_plate`, `state` | same shape; use to narrow to one plan |
-| 2 | Get value summary + retention offer (combined) | `POST /api/plans/value-summary` or combined endpoint | `customer_id`, `plan_id` (from step 1) | value_summary fields, retention_offer_id, description, expires_at |
-| 3 | Apply retention offer | `POST /api/retention/apply-offer` | `retention_offer_id`, `customer_id` | `success`, message, retention_offer_id, discount_code |
-| 3 | Cancel plan | `POST /api/plans/cancel` | `customer_id`, `plan_id`, `cancel_at_period_end` | `success`, message, effective_date |
-| — | Get plan info (if not in lookup) | `POST /api/plans/get-info` | `customer_id` (from step 1) | `plan_id`, status, plan_name |
-| — | Get data by identifier | `POST /api/data/get-by-identifier` | Your identifier(s) | Your structure |
-| — | Get plan by key | `POST /api/plans/get-info-by-key` | e.g. vehicle_id, account_id | Same as get-info |
-| — | Create plan | `POST /api/plans/create` | Per your requirements | Created resource + IDs |
+| Step | Operation | Endpoint (examples; paths flexible) | Request (example) | Response (example) |
+|------|-----------|-----------------------------------|-------------------|---------------------|
+| 1 | Lookup by phone | `POST /api/customers/lookup-by-phone` or `/api/members/lookup-by-phone`, `/api/accounts/lookup-by-phone` | `{"phone": "5551234567"}` | `{"customer_id": "12345", "name": "John Doe", "email": "...", "phone_number": "..."}` — may include plans/vehicles or list for disambiguation |
+| 1 | Lookup by email or plate (disambiguation) | `POST /api/customers/lookup-by-email` or `lookup-by-plate`; or `/api/members/lookup-by-email`, `/api/vehicles/lookup-by-plate` | `{"email": "..."}` or `{"license_plate": "ABC123", "state": "CA"}` | Same shape as phone; plate often returns `vehicle_id`, one vehicle + active plan |
+| 2 | Get value summary + retention offer (combined or separate) | `POST /api/plans/value-summary` or combined e.g. `/api/plans/value-and-offer`, `/api/retention/get-value-and-offer`; or `/api/membership/value-summary`, `/api/usage/summary` | `{"customer_id": "12345", "plan_id": "sub456"}` | Value: `plan_price`, `washes_used_in_period`, `value_saved_in_period`, etc. Offer: `retention_offer_id`, `description`, `expires_at` (or nested in same payload) |
+| 3 | Apply retention offer | `POST /api/retention/apply-offer` or `/api/offers/apply`, `/api/retention/redeem` | `{"retention_offer_id": "offer789", "customer_id": "12345"}` | `{"success": true, "message": "...", "retention_offer_id": "...", "discount_code": "..."}` |
+| 3 | Cancel plan | `POST /api/plans/cancel` or `/api/subscription/cancel`, `/api/cancellation/apply` | `{"customer_id": "12345", "plan_id": "sub456", "cancel_at_period_end": true, "cancellation_reason": "Customer requested"}` | `{"success": true, "message": "...", "plan_id": "...", "effective_date": "..."}` |
+| — | Get plan info (if not in lookup) | `POST /api/plans/get-info` or `/api/membership/get-info`, `/api/subscription/get-info` | `{"customer_id": "12345"}` | `{"plan_id": "sub456", "customer_id": "12345", "status": "active", "plan_name": "Unlimited Monthly"}` |
+| — | Get data by identifier | `POST /api/data/get-by-identifier` or `/api/vehicles/get-by-account`, `/api/members/get-vehicles` | Your identifier(s), e.g. `{"customer_id": "12345"}` | Your structure |
+| — | Get plan by key | `POST /api/plans/get-info-by-key` or `/api/plans/get-by-key` | e.g. `{"vehicle_id": "v789"}` or `{"account_id": "..."}` | Same shape as get-info |
+| — | Create plan | `POST /api/plans/create` or `/api/subscription/create`, `/api/membership/create` | Per your requirements | Created resource + IDs |
 
 ---
 
@@ -974,14 +958,21 @@ Lookup by phone (default) returns customer + plan + vehicle. If multiple results
 1. **Priority endpoints first:** Look up by phone, email, or license plate; get plan info; get value summary (for cancellation flow); cancel; get retention offer; apply retention offer.
 2. **Multiple results:** Test phone and email lookup when the customer has multiple plans or vehicles (disambiguation or single active); test plate lookup for a single vehicle and its active plan.
 3. **Error cases:** Not found, invalid IDs, already cancelled, expired offer, invalid phone/email/plate format.
-4. **ID consistency:** Same identifier from lookup (and get-info when used) is used for value-summary, cancel, and retention; retention_offer_id from get-offer is used in apply-offer. If using a single customer payload, customer_id and plan_id from that response are used for subsequent calls.
+4. **ID consistency:** Same identifier from lookup (and get-info when used) is used for value-summary, cancel, and retention; retention_offer_id from get-offer is used in apply-offer.
 5. **Hierarchy:** If you use account/member/vehicle distinctions, test with the IDs and field names that match your model.
+6. If Jax supports both separate and combined value-summary/retention-offer options, test both.
 
 ---
 
 ## Next Steps
 
 This document outlines the general plan for API integration. The specific workflows, confirmation prompts, error handling strategies, and edge cases will be refined through ongoing discussions with the tech teams and Meddy. Endpoint paths, request/response formats, and field names can be adjusted to align with Jax's existing API structure and conventions.
+
+---
+
+## Future discussion: all-in-one option
+
+We have documented the flow above (lookup by phone for customer, plan, and vehicle; then one combined value-summary and retention-offer call). As a possible future optimization or follow-up discussion, we could also explore **combining all of these operations into a single API call** (e.g. one lookup by phone returning customer, plan, vehicle, value summary, and retention offer together). That would reduce round-trips and simplify the flow further; we can revisit this once the current integration is in place.
 
 ---
 
