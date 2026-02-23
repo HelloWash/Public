@@ -81,6 +81,7 @@ This section describes that same flow in terms of how data can be grouped.
 **Flow:** Lookup by phone (customer + plan + vehicle). If multiple results, disambiguate (email, plate, or clarifying questions). Once the plan is isolated, **one combined call** for value summary + retention offer. Then playback, present offer, apply-offer or cancel.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart LR
     Step1["Lookup by phone"]
     Step2["Disambiguate if multiple"]
@@ -121,6 +122,7 @@ The integration flow is: lookup by phone returns customer + plan + vehicle; we d
 "Get customer + plan + vehicle" is the first lookup response; value and offer come in a later combined call.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart TD
     IncomingCall["Incoming call"] --> LookupPhone["Lookup by phone<br/>known ANI"]
     LookupPhone --> Found{Found?}
@@ -138,6 +140,7 @@ flowchart TD
 When the customer’s intent is cancel, the flow continues as below. See the Operational Flows section for sequence diagrams.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart TD
     IntentCancel["Customer intent = cancel"] --> GetValueOffer["Get value summary and retention offer<br/>one combined call"]
     GetValueOffer --> HaveBundle{"Value summary and retention offer<br/>present?"}
@@ -162,6 +165,7 @@ flowchart TD
 Used when the system does not have a matching customer for the incoming phone number, or when we need to disambiguate (e.g. multiple results from phone lookup). Try email, then plate, then ask for an alternative identifier. When multiple results from phone lookup, use email or plate to narrow; once the plan is isolated, call the combined value-summary and retention-offer endpoint.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart TD
     NotFound["Not found by phone"] --> TryEmail["POST /api/customers<br/>lookup-by-email"]
     TryEmail --> Result2{Result?}
@@ -701,7 +705,7 @@ sequenceDiagram
         System->>API: POST /api/plans/cancel
         API-->>System: success, effective_date
         System->>Customer: "Cancelled. Access until [date]. Confirmation sent via SMS."
-    else Value summary and or offer present
+    else Value summary and/or offer present
         System->>Customer: Play back value summary
         Customer->>System: Still want to cancel or changed mind
         alt Customer changed mind
@@ -838,6 +842,7 @@ For a detailed step-by-step sequence of cancellation by phone, see **Flow 1** (D
 Which API endpoints the system calls depends on call start (lookup by known phone first), then customer intent. All calls are POST. This diagram shows the decision points including lookup failure fallback, validation, confirmation, and error handling. Value summary and retention offer come from one combined call (or separate calls) after plan is isolated.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart TD
     IncomingCall["Incoming call"] --> LookupPhone["Lookup by phone<br/>known ANI"]
     LookupPhone --> Found1{Found?}
@@ -881,6 +886,7 @@ flowchart TD
 IDs returned from one endpoint are passed into the next. This diagram shows the minimal set for the **multi-call approach**. Value summary and retention offer are one combined endpoint (or separate value-summary and get-offer); we call after plan is isolated.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 45, 'wrappingWidth': 220}}}%%
 flowchart LR
     subgraph Lookup["Lookup"]
         A["lookup-by-phone /<br/>email / plate"]
