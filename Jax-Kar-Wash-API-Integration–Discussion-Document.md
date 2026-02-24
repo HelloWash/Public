@@ -1052,25 +1052,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 *Alternatively you might use `account_id`, `member_id`, `vehicle_id`, or a combination; document what you need.*
 
-~~**Response (200):**
-
-```json
-{
-  "data": [
-    {
-      "vehicle_id": "v789",
-      "license_plate": "ABC123",
-      "state": "CA",
-      "make": "Toyota",
-      "model": "Camry",
-      "plan_id": "sub456",
-      "plan_status": "active"
-    }
-  ]
-}
-```
-
-*Structure can follow your hierarchy (e.g. vehicles with nested or linked plan/membership). We need enough to support cancellation or retention if this path is used in those flows.*~~
+<del>**Response (200):** Array of vehicles, e.g. `{"data": [{"vehicle_id": "v789", "license_plate": "ABC123", "state": "CA", "make": "Toyota", "model": "Camry", "plan_id": "sub456", "plan_status": "active"}]}`. *Structure can follow your hierarchy (e.g. vehicles with nested or linked plan/membership). We need enough to support cancellation or retention if this path is used in those flows.*</del>
 
 **Response (200):**
 
@@ -1083,13 +1065,7 @@ These support richer flows and lifecycle operations. We do not assume your hiera
 
 One vehicle and one subscription per account (no array). *Marvin's context*
 
-~~**Response (200 – empty):**
-
-```json
-{
-  "data": []
-}
-```~~
+<del>**Response (200 – empty):** `{"data": []}`</del>
 
 **Response (200 – empty):** When no vehicle/subscription for that account: e.g. `"vehicle": null, "subscription": null` or 404 per Jax. *Marvin's context*
 
