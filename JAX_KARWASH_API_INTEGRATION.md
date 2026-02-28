@@ -1,5 +1,8 @@
 # Jax Karwash API Integration Specification
 
+## **This documentation is outdated, please see the new [Jax Kar Wash API Integration – Discussion Document](Jax-Kar-Wash-API-Integration–Discussion-Document.md)**
+
+<del>
 ## Document Overview
 
 This document provides a complete specification for the API endpoints that Jax Karwash must implement to integrate with our webforms platform. The integration enables user authentication, account management, vehicle information retrieval, subscription management, and retention offers.
@@ -1048,3 +1051,5 @@ For implementation questions or issues with this specification, please contact:
 
 **Document Version**: 1.0 (Jax Karwash Edition)  
 **Last Updated**: February 17, 2026  
+</del>
+
